@@ -1,0 +1,38 @@
+[project]
+name = "xp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "patnr", email = "patrick.n.raanes@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "colorama>=0.4.6",
+    "matplotlib>=3.10.8",
+    "pandas>=2.3.3",
+    "pathos>=0.3.4",
+    "sparse==0.15.4",
+    "threadpoolctl>=3.6.0",
+    "tqdm>=4.67.1",
+    "xarray>=2025.12.0",
+    "matrepr>=1.0.1",
+    "mplcyberpunk>=0.7.6",
+    "numba>=0.54",
+    "numpy>=2.3.5",         # https://github.com/numpy/numpy/issues/29820
+]
+
+[project.scripts]
+xp = "xp:main"
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
+
+[tool.ruff]
+line-length = 100
