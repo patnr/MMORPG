@@ -6,13 +6,11 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from tempfile import NamedTemporaryFile
 
 import dill
 from tqdm.auto import tqdm
 
-from . import uplink
-from .local_mp import mp
+from .uplink import Uplink, resolve_host_glob
 
 timestamp = "%Y-%m-%d_at_%H-%M-%S"
 bar_frmt = "{l_bar}|{bar}| {n_fmt}/{total_fmt}, ⏱️ {elapsed} ⏳{remaining}, {rate_fmt}{postfix}"
@@ -66,25 +64,6 @@ def git_sha():
     return subprocess.run(["git", "rev-parse", "--short", "HEAD"], **responsive).stdout.strip()
 
 
-def mk_data_dir(
-    data_dir,
-    tags=(),  # Whatever you want, e.g. "v1"
-    mkdir=True,  # Make dirs, including xps/ and res/
-):
-    """Add timestamp/tag and mkdir for data storage."""
-    if tags:
-        data_dir /= tags
-    else:
-        data_dir /= datetime.now().strftime(timestamp)
-
-    if mkdir:
-        data_dir.mkdir(parents=True)
-        (data_dir / "xps").mkdir()
-        (data_dir / "res").mkdir()
-
-    return data_dir
-
-
 def find_proj_dir(script: Path):
     """Find python project's root dir.
 
@@ -101,56 +80,205 @@ def find_proj_dir(script: Path):
 
 def save(xps, data_dir, nBatch):
     print(f"Saving {len(xps)} xp's to", data_dir)
-    batch_size = 1 + len(xps) // nBatch
+    ceil_division = lambda a, b: (a + b - 1) // b  # noqa: E731
+    batch_size = ceil_division(len(xps), nBatch)
+    nBatch = ceil_division(len(xps), batch_size)
 
     def save_batch(i):
         xp_batch = xps[i * batch_size : (i + 1) * batch_size]
         (data_dir / "xps" / str(i)).write_bytes(dill.dumps(xp_batch))
 
     # saving can be slow ⇒ mp
-    mp(save_batch, range(nBatch))
+    # from .local_mp import mp
+    # mp(save_batch, range(nBatch))
+    for i in tqdm(list(range(nBatch))):
+        save_batch(i)
 
 
-# Note on development
-# Would like to develop `dispatch` through an *editable* install,
-# but this does not easily work when transposed to *remote*,
-# because the local path is of course invalid (and hard to replicate).
-# Flagging the package as `--dev` or optional (and not installing it on remote) does not work,
-# because `uv` will still check if it's present.
-# Solutions:
-#
-# - Sync it via github. Seems overkill, and has complications:
-#   * Use `uv sync --upgrade-package xp` to upgrade in lockfile.
-#   * May need to clear cache to pick up latest commit.
-# - Copy `src/xp/` dir to PWD. I.e. no install.
-#   ⇒ must disable `xp` among dependencies, but copy over sub-dependencies.
-# - The above duplicate is quite likely to cause confusion.
-#   ⇒ Symlink instead. Requires `-L` flag to `rsync` (append to `-azh`).
+def get_cluster_resources(remote: Uplink):
+    # SLURM
+    # Columns: [Partition, CPUS(A/I/O/T), NODES(A/I)]
+    resources = remote.cmd('sinfo -o "%P %C %A"').stdout
+    for line in resources.strip().splitlines()[1:]:  # skip header
+        partition, nCPUS, nNODES = line.split()
+        if partition.startswith("comp"):
+            cpus = map(int, nCPUS.split("/"))
+            nodes = map(int, nNODES.split("/"))
+            cpus = dict(zip(["allocated", "idle", "other", "total"], cpus))
+            nodes = dict(zip(["allocated", "idle"], nodes))
+            return cpus, nodes
+
+
+def install_deps(remote: Uplink, remote_dir: Path, proj_dir: Path):
+    # Install (potentially outdated) deps (from lockfile)
+    # PS: Pre-install `uv` using `wget -qO- https://astral.sh/uv/install.sh | sh`
+    venv = f"~/.cache/venvs/{proj_dir.stem}"
+    remote.cmd(
+        f"command cd {remote_dir / proj_dir.stem}; UV_PROJECT_ENVIRONMENT={venv} uv sync",
+        capture_output=False,  # simply print
+    )
+    venv = remote.cmd("echo " + venv).stdout.splitlines()[0]  # eval ~ $HOME etc
+    py = f"{venv}/bin/python"
+    return py
+
+
+def submit_and_monitor_slurm(remote, cmd, remote_dir, slurm_kws):
+    # Unpack
+    nCPU = cmd[-1]
+    nJobs = int(remote.cmd(f"ls {remote_dir}/xps | wc -l").stdout.strip())
+
+    defaults = {
+        # These CLI options take precedence over #SBATCH directives
+        # Also see https://documentation.sigma2.no/software/userinstallsw/conda.html
+        "account": "energytech",            # Not necessary?
+        "partition": "comp",                # Type of nodes?
+        # "job_name": script.name,
+        "qos": "normal",                    # Only one available I think
+        "nice": 1000,                       # High value ⇒ low priority in queue
+        "array": f"0-{nJobs-1}",            # list of job/batch indices
+        "output": "output/%a",              # StdOut (separate files per array task)
+        "error": "error/%a",                # StdErr
+        "mem-per-cpu": "200M",              # Max memory (per array task)
+        "time": "01:00:00",                 # Max runtime (HH:MM:SS)
+        "cpus-per-task": nCPU               # Max CPUs (per array task)
+        # Relevant only for MPI jobs (we ony handle embarrasingly parallelisable jobs):
+        # "ntasks": ???
+        # "nodes": ???
+        # If venv not found, or other issues arise that might be due to file system, perhaps try:
+        # "requeue": True
+        # "max-requeue": 3
+    }  # fmt: skip
+    slurm_kws = {**defaults, **(slurm_kws or {})}
+    slurm_opts = {
+        "--" + k.replace("_", "-") + ("" if v is True else f"={v}"): v for k, v in slurm_kws.items()
+    }
+
+    # Submit
+    job_id = remote.cmd(
+        ["sbatch", *slurm_opts, "slurm_job_array.sbatch", *cmd, str(remote_dir / "xps")],
+        cwd=remote_dir,
+    )
+    print(job_id.stdout, end="")
+    job_id = int(re.search(r"job (\d*)", job_id.stdout).group(1))
+
+    # Monitor job progress
+    try:
+        with tqdm(total=nJobs, desc="Jobs") as pbar:
+            unfinished = nJobs
+            while unfinished:
+                time.sleep(1)  # dont clog the ssh uplink
+                new = f"squeue -j {job_id} -r -h -t pending,running,completing | wc -l"
+                new = int(remote.cmd(new).stdout)
+                inc = unfinished - new
+                pbar.update(inc)
+                unfinished = new
+    except KeyboardInterrupt:
+        print(f"\nCancelling job {job_id}...")
+        remote.cmd(f"scancel {job_id}")
+        raise
+
+    # Provide error summary
+    # NOTE: Most errors will be caught (and logged) already by `local_mp.py`
+    failed = f"sacct -j {job_id} --format=JobID,State,ExitCode,NodeList | grep -E FAILED"
+    failed = remote.cmd(failed, check=False).stdout.splitlines()
+    if failed:
+        regex = r"_(\d+).*(node-\d+) *$"
+        nodes = {int((m := re.search(regex, ln)).group(1)): m.group(2) for ln in failed}
+        for task in nodes:
+            print(f" Error for job {job_id}_{task} on {nodes[task]} ".center(70, "="))
+            print(remote.cmd(f"cat {remote_dir}/error/{task}").stdout)
+        raise RuntimeError(f"Task(s) {list(nodes)} had errors, see printout above.")
 
 
 def dispatch(
     fun: callable,
     xps: list,
-    host: str = None,  # Server alias
-    script: Path = None,  # Path to script containing `fun`
-    nCPU: int = None,  # number of CPUs to engage
-    nBatch: int = None,  # number of batches (splits) of xps
-    # NB: `multiprocessing` module already does "chunking",
-    # so this is intended to be used on clusters with queue systems.
-    # For efficiency, the resulting batch_size should be >= nCPU (per node) * 100
-    proj_dir: Path = None,  # e.g. Path(__file__).parents[0]
+    host: str = "SUBPROCESS",
+    script: Path = None,
+    nCPU: int = None,
+    nBatch: int = None,
+    proj_dir: Path = None,
+    tags: list | str = None,
     data_root: Path = Path.home() / "data",
-    data_root_on_remote: Path = None,  # e.g. "${HOME}/data" or "${USERWORK}"
+    data_root_on_remote: Path = None,
+    slurm_kws: dict = None,
 ):
     """
-    Do `[fun(**kwargs) for kwargs in xps]`, but on various remote hosts/servers.
+    Execute function over parameter sets on remote hosts/clusters (or locally).
 
-    The `proj_dir` must be a parent to `script`,
-    and gets copied into (and so uploaded with) `data_dir` (which also mirrors path of `proj_dir`!).
-    To promote independence of the uploaded code "environment" vs. whatever
-    "happens to be" the `cwd` (less headaches!), the `proj_dir` should NOT be the `cwd`.
-    Still, if possible (if subpath to `proj_dir`), the `cwd` is "preserved" on remote,
-    such that resources specified relative to it (sloppy!) may be found.
+    Essentially: `[fun(**kwargs) for kwargs in xps]`.
+
+    Parameters
+    ----------
+    fun : callable
+        Function to apply to each experiment.
+    xps : list
+        Job array, i.e. list of (parameter) dictionaries to pass to `fun`.
+    host : str, optional
+        Remote server, e.g. "cno-006".
+        Can also be an `ssh/.config` alias, and supports wildcards, e.g., "my-gcp*".
+        See `xp/setup-compute-node.sh` for instructions on setting up a Google cloud VM.
+        Default is `"SUBPROCESS"`, i.e. local execution.
+        Another value commonly used for testing is `"localhost"`.
+    script : Path, optional
+        Path to script containing `fun`, auto-detected if `None`.
+        Used to import "by name" and thus avoid pickling `fun`, which often contains deep references,
+        and would consume excessive storage/bandwidth (especially if saved with each experiment).
+    nCPU : int, optional
+        Number of CPUs used by python's multiprocessing (locally, on a given server, or cluster node).
+        Defaults to `None` ⇒ auto-detect.
+    nBatch : int, optional
+        Number of batches to split `xps` job array into. Useful for SLURM clusters.
+        Note: this enables *nested* multiprocessing (SLURM + python).
+        * Let `N` be the total available CPUs, and suppose `len(xps) >> N` for simplicity.
+          Example: NORCE HPC cluster has 3584 CPUs distributed as 14 nodes * 256 CPUs/node.
+        * Maybe don't want to hog all available CPUs? Not an important consideration if using `--nice`.
+        * Want `nBatch * nCPU == n N` for some integer `n > 0` to make use of all CPUs.
+          If instead `n` is slightly above integer, e.g. 5.01,
+          then only a single batch will be running towards the end of the total job
+          (assuming uniformity of experiment duration and nodes).
+        * It might seem that you could set `nCPU=1` and use `nBatch=N`, however
+          - Must keep `nBatch < 1000` due to queue system limit.
+          - SLURM is significantly slower in distributing jobs than py multiprocessing.
+          - Saving many `xps` is slow (even though total data is same), even w/ multiprocessing.
+        * Still, want at least `nBatch > 4x nNodes`, to get some load balancing by SLURM.
+
+        Defaults: `56` for NORCE HPC, `1` for local/other.
+        Also see: `get_cluster_resources`
+    proj_dir : Path, optional
+        Project root directory.
+        Gets copied into (and so uploaded with) `data_dir`.
+        Does not actually have to be the root of a python package,
+        but must be parent of `script` (for example, its basename).
+        Auto-detected via git if `None`.
+        - NOTE: using "." may seem reasonable, but is bad practice since it promotes dependence
+            on whatever happens to be `cwd`.
+            Instead, resources (and imports) should be absolute or relative to `script`.
+        - NOTE: if you need to access resources outside of `proj_dir` then you should refer to them
+            with absolute paths and upload them manually, since our auto-push/pull mechanism is intended
+            for allowing fast testing of your code, not all manner of other resources
+            (which may be reliant on all manner of further resources and ecosystems).
+    tags: list, optional
+        By default the data gets stamped with the current datetime.
+        You can chose to replace this with your custom tags, for example: ["v1"].
+    data_root : Path, optional
+        Local root for experiment data. Default: `~/data`
+        Gets populated by `xps/`, `res/`, the `proj_dir`, and `slurm_job_array.sbatch`.
+    data_root_on_remote : Path, optional
+        Remote root for data. Auto-set: `${USERWORK}` (NORCE HPC) or `${HOME}/data` (other).
+
+    Returns
+    -------
+    Path
+        Path to local data directory containing experiment inputs and results.
+
+    Examples
+    --------
+    See `example.py`
+
+    Notes
+    -----
+    This is all largely an exercise in path management!
     """
     # Validate inputs before expensive operations
     if not callable(fun):
@@ -158,157 +286,91 @@ def dispatch(
     if not xps:
         raise ValueError("xps list cannot be empty")
 
-    # Don't want to pickle `fun`, because it often contains very deep references,
-    # and take up a lot of storage (especially if saved with each xp).
-    # ⇒ Ensure we know the script from which we can import it.
+    # Get path to `script`
     if script is None:
         # Use `co_filename` because `fun.__module__` is sometimes "__main__" and sometimes relative
         script = fun.__code__.co_filename
     script = Path(script)
 
-    # Place launch script in same dir as script
-    shutil.copy(Path(__file__).parent / "launch_xps.py", script.parent)
-
-    # proj_dir
+    # Find proj_dir (code to upload)
     if proj_dir is None:
         proj_dir = find_proj_dir(script)
     if len(proj_dir.relative_to(Path.home()).parts) <= 2:
         msg = f"The `proj_dir` ({proj_dir}) should be uploaded, but is too close to home dir."
         raise RuntimeError(msg)
 
-    # data_dir
-    data_dir = data_root / proj_dir.stem / script.relative_to(proj_dir).stem
-    data_dir = mk_data_dir(data_dir)
+    # Save to data_dir (root archive & working dir for current job)
+    data_dir = data_root / proj_dir.stem / script.stem  # ⇒ ~/data/proj/script [usually]
+    if tags:
+        data_dir /= tags
+    else:
+        data_dir /= datetime.now().strftime(timestamp)
+    data_dir.mkdir(parents=True)
+    (data_dir / "xps").mkdir()
+    (data_dir / "res").mkdir()
 
-    # Host alias "globbing"
-    if host is None:
-        host = "SUBPROCESS"
-    elif host.endswith("*"):
-        host = uplink.resolve_host_glob(host)
+    # Make relative
+    script = proj_dir.stem / script.relative_to(proj_dir)
 
-    # Save xps -- partitioned (for node distribution)
-    if nBatch is None:
-        nBatch = 40 if host.startswith("login-") else 1
+    # Copy resources to data_dir
+    ignores = shutil.ignore_patterns("*.pyc", "__pycache__")
+    shutil.copytree(proj_dir, data_dir / proj_dir.stem, ignore=ignores)
+    shutil.copy(Path(__file__).parent / "slurm_job_array.sbatch", data_dir)
+    shutil.copy(Path(__file__).parent / "exprm_wrapper.py", data_dir / script.parent)
+
+    # Save xps -- partitioned for node distribution
+    if host and "hpc.intra.norceresearch" in host:
+        if nBatch is None:
+            nBatch = 55
+        nBatch = min(1000, nBatch)  # formal queue limit
+        if nCPU is None:
+            nCPU = 64
+    elif nBatch is None:
+        nBatch = 1
     save(xps, data_dir, nBatch)
 
-    # List resulting paths
-    paths_xps = sorted((data_dir / "xps").iterdir(), key=lambda p: int(p.name))
-    assert paths_xps, f"No files found in {data_dir}"
+    def concat_cmd(python, scrpt):
+        args = [python, scrpt.parent / "exprm_wrapper.py", scrpt.stem, fun.__name__, nCPU]
+        args = [str(x) for x in args]
+        return args
 
     # Run locally
-    if host == "SUBPROCESS":
-        for xp in paths_xps:
+    if host in ["SUBPROCESS", None]:
+        # subprocessing is unecessary, but using a similar code path (as remote) facilitates debugging.
+        cmd = concat_cmd(sys.executable, data_dir / script)
+        for xp in (data_dir / "xps").iterdir():  # or sorted(--"--, key=lambda p: int(p.name)):
             try:
-                # current_interpreter = "python" # requires active venv
-                current_interpreter = sys.executable
-                subprocess.run(
-                    [
-                        current_interpreter,
-                        script.parent / "launch_xps.py",
-                        script.stem,
-                        fun.__name__,
-                        xp,
-                        str(nCPU),
-                    ],
-                    check=True,
-                    cwd=Path.cwd(),
-                )
+                subprocess.run(cmd + [xp], check=True, cwd=Path.cwd())
             except subprocess.CalledProcessError:
                 raise
 
     # Run remotely
-    # NOTE:
-    # - See xp/setup-compute-node.sh for instructions on setting up a GCP VM.
-    # - Use "localhost" for testing/debugging w/o actual server.
     else:
-        remote = uplink.Uplink(host)
+        if host.endswith("*"):
+            host = resolve_host_glob(host)
+        remote = Uplink(host)
 
-        # Eval data_root_on_remote
-        # PS: not strictly necessary, since cmd/rsync evaluates it on its own,
-        # but seems more robust and future-proof (for complex commands)
+        # data_root_on_remote
         if data_root_on_remote is None:
-            if "hpc.intra.norceresearch" in host:
-                data_root_on_remote = "${USERWORK}"
-            else:
-                data_root_on_remote = "${HOME}/data"
-        data_root_on_remote = remote.cmd("echo " + data_root_on_remote).stdout.splitlines()[0]
-
-        data_dir_remote = Path(data_root_on_remote) / data_dir.relative_to(data_root)
-        paths_xps = [data_dir_remote / xp.relative_to(data_dir) for xp in paths_xps]
-
-        # Make (try!) cwd such that the relative path of the script is same as locally
-        try:
-            cwd = Path.cwd().relative_to(proj_dir)
-        except ValueError:
-            print("Warning: The cwd is outside of project path ⇒ should not be relied on.")
-            cwd = Path(".")
-        finally:
-            cwd = data_dir_remote / proj_dir.stem / cwd
-        script = data_dir_remote / proj_dir.stem / script.relative_to(proj_dir)
-
-        with remote.sym_sync(data_dir_remote, data_dir, proj_dir):
-            # Install (potentially outdated) deps (from lockfile)
-            # PS: Pre-install `uv` using `wget -qO- https://astral.sh/uv/install.sh | sh`
-            venv = f"~/.cache/venvs/{proj_dir.stem}"
-            remote.cmd(
-                f"cd {data_dir_remote / proj_dir.stem}; UV_PROJECT_ENVIRONMENT={venv} uv sync",
-                capture_output=False,  # simply print
+            data_root_on_remote = (
+                "${USERWORK}" if "hpc.intra.norceresearch" in host else "${HOME}/data"
             )
+        # Evaluate. Maybe unecessary since ${some_envar} could work below as-is
+        data_root_on_remote = remote.cmd("echo " + data_root_on_remote).stdout.splitlines()[0]
+        # remote_dir
+        remote_dir = Path(data_root_on_remote) / data_dir.relative_to(data_root)
 
-            # Run on NORCE HPC cluster with SLURM queueing system
+        # Sync on enter & exit
+        with remote.sym_sync(remote_dir, data_dir, proj_dir):
+            py = install_deps(remote, remote_dir, proj_dir)
+            cmd = concat_cmd(py, remote_dir / script)
+
             if "hpc.intra.norceresearch" in host:
-                # Send job submission script
-                with NamedTemporaryFile(mode="w+t", delete_on_close=False) as sbatch:
-                    txt = (Path(__file__).parent / "slurm_script.sbatch").read_text()
-                    txt = eval(f"f'''{txt}'''", {}, locals())  # interpolate f-strings inside {txt}
-                    sbatch.write(txt)
-                    sbatch.close()
-                    remote.rsync(sbatch.name, data_dir_remote / "job_script.sbatch")
-
-                # Submit
-                job_id = remote.cmd(f"command cd {data_dir_remote}; sbatch job_script.sbatch")
-                print(job_id.stdout, end="")
-                job_id = int(re.search(r"job (\d*)", job_id.stdout).group(1))
-
-                # Monitor job progress
-                nJobs = len(paths_xps)
-                with tqdm(total=nJobs, desc="Jobs") as pbar:
-                    unfinished = nJobs
-                    while unfinished:
-                        time.sleep(1)  # dont clog the ssh uplink
-                        new = f"squeue -j {job_id} -h -t pending,running -r | wc -l"
-                        new = int(remote.cmd(new).stdout)
-                        inc = unfinished - new
-                        pbar.update(inc)
-                        unfinished = new
-
-                # Provide error summary
-                failed = (
-                    f"sacct -j {job_id} --format=JobID,State,ExitCode,NodeList | grep -E FAILED"
-                )
-                failed = remote.cmd(failed, check=False).stdout.splitlines()
-                if failed:
-                    regex = r"_(\d+).*(node-\d+) *$"
-                    nodes = {int((m := re.search(regex, ln)).group(1)): m.group(2) for ln in failed}
-                    for task in nodes:
-                        print(f" Error for job {job_id}_{task} on {nodes[task]} ".center(70, "="))
-                        print(remote.cmd(f"cat {data_dir_remote}/error/{task}").stdout)
-                    raise RuntimeError(f"Task(s) {list(nodes)} had errors, see printout above.")
+                # Run on NORCE HPC cluster via SLURM queueing system
+                submit_and_monitor_slurm(remote, cmd, remote_dir, slurm_kws)
 
             else:
-                # Run (`launch_xps.py` uses `mp` ⇒ no point parallelising this loop)
-                for xp in paths_xps:
-                    remote.cmd(
-                        [
-                            # PS: A well-crafted script should be independend of cwd ...
-                            f"cd {cwd};",  # ... so should ideally be able to comment out this line.
-                            f"{venv}/bin/python",
-                            script.parent / "launch_xps.py",
-                            script.stem,
-                            fun.__name__,
-                            xp,
-                            nCPU,
-                        ],
-                        capture_output=False,  # simply print
-                    )
+                # Run directly (on remote host)
+                for xp in (data_dir / "xps").iterdir():
+                    remote.cmd(cmd + [str(remote_dir / "xps" / xp.name)], capture_output=False)
     return data_dir

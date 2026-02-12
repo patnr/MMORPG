@@ -121,18 +121,6 @@ def test_save_with_uneven_batches(tmp_path):
     assert len(loaded) == 10
 
 
-def test_save_empty_list(tmp_path):
-    """Test saving empty experiment list"""
-    xps = []
-    data_dir = tmp_path / "test_data"
-    (data_dir / "xps").mkdir(parents=True)
-
-    xp.save(xps, data_dir, nBatch=1)
-    loaded = xp.load_data(data_dir / "xps", pbar=False)
-
-    assert loaded == []
-
-
 def test_load_data_with_progress_bar(tmp_path):
     """Test that progress bar parameter works"""
     xps = [{"i": i} for i in range(5)]

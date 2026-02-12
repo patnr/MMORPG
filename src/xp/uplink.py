@@ -40,7 +40,7 @@ def resolve_host_glob(host: str) -> str:
 class Uplink:
     """Multiplexed connection to `host` via ssh."""
 
-    def __init__(self, host, progbar=False, dry=False, use_M=True):
+    def __init__(self, host, progbar=True, dry=False, use_M=True):
         self.host = host
         self.progbar = progbar
         self.dry = dry
@@ -95,10 +95,12 @@ class Uplink:
         except subprocess.TimeoutExpired:
             return False, "Connection timeout"
 
-    def cmd(self, cmd: str, login_shell=True, **kwargs):
+    def cmd(self, cmd: str, login_shell=True, cwd=None, **kwargs):
         """Run a command on the remote host."""
         if isinstance(cmd, list):
-            cmd = " ".join([str(x) for x in cmd])
+            cmd = " ".join(cmd)
+        if cwd is not None:
+            cmd = f"command cd {cwd} && {cmd}"
         if login_shell:
             # sources ~/.bash_profile or ~/.profile, which may or not include ~/.bashrc
             cmd = f"bash -l -c '{cmd}'"
@@ -157,10 +159,12 @@ class Uplink:
     def sym_sync(self, target_dir: Path | str, source_dir: Path, *other):
         """Upload `source_dir` and all `other` to `target_dir` on host. Download upon exit/exception."""
         # Sync source -> target
+        print(f"Sending {source_dir}")
         self.cmd(f"mkdir -p {target_dir}")
         self.rsync(f"{source_dir}/", target_dir)
         # Sync other.name -> target/
         for p in other:
+            print(f"Sending {p}")
             p = Path(p).expanduser().resolve()
             if p == Path.home():
                 raise ValueError("You probably do not want to sync your entire home dir.")

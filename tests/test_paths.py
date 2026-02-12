@@ -1,7 +1,6 @@
 """Tests for path resolution and directory management."""
 
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import xp
 
@@ -104,62 +103,6 @@ def test_find_proj_dir_marker_priority(tmp_path):
     assert result == root
 
 
-def test_mk_data_dir_with_timestamp(tmp_path):
-    """Test timestamp-based directory creation"""
-    data_dir = tmp_path / "data"
-
-    before = datetime.now().replace(microsecond=0)  # Timestamp format has no microseconds
-    result = xp.mk_data_dir(data_dir, mkdir=True)
-    after = datetime.now().replace(microsecond=0) + timedelta(seconds=1)
-
-    # Check structure was created
-    assert result.exists()
-    assert (result / "xps").exists()
-    assert (result / "res").exists()
-
-    # Check timestamp format in path
-    timestamp_str = result.name
-    parsed = datetime.strptime(timestamp_str, xp.timestamp)
-
-    # Should be between before and after (with tolerance for seconds-only precision)
-    assert before <= parsed <= after
-
-
-def test_mk_data_dir_with_tags(tmp_path):
-    """Test tagged directory creation"""
-    data_dir = tmp_path / "data"
-    tags = "v1_test"
-
-    result = xp.mk_data_dir(data_dir, tags=tags, mkdir=True)
-
-    assert result.exists()
-    assert result.name == tags
-    assert (result / "xps").exists()
-    assert (result / "res").exists()
-
-
-def test_mk_data_dir_without_mkdir(tmp_path):
-    """Test mk_data_dir with mkdir=False"""
-    data_dir = tmp_path / "data"
-
-    result = xp.mk_data_dir(data_dir, tags="test", mkdir=False)
-
-    # Should return path but not create it
-    assert not result.exists()
-    assert result.name == "test"
-
-
-def test_mk_data_dir_creates_parents(tmp_path):
-    """Test that mk_data_dir creates parent directories"""
-    data_dir = tmp_path / "level1" / "level2" / "level3"
-
-    result = xp.mk_data_dir(data_dir, tags="test", mkdir=True)
-
-    assert result.exists()
-    assert result.parent.exists()
-    assert result.parent.parent.exists()
-
-
 def test_find_latest_run(tmp_path):
     """Test finding latest experiment run by timestamp"""
     root = tmp_path / "experiments"
@@ -209,20 +152,6 @@ def test_find_latest_run_ignores_invalid_formats(tmp_path):
 
     latest = xp.find_latest_run(root)
     assert latest == "2024-02-20_at_15-00-00"
-
-
-def test_mk_data_dir_unique_timestamps(tmp_path):
-    """Test that rapid successive calls create unique directories"""
-    data_dir = tmp_path / "data"
-
-    result1 = xp.mk_data_dir(data_dir, mkdir=True)
-    # Small delay to ensure different timestamp
-    time.sleep(1.1)
-    result2 = xp.mk_data_dir(data_dir, mkdir=True)
-
-    assert result1 != result2
-    assert result1.exists()
-    assert result2.exists()
 
 
 def test_find_proj_dir_returns_none_if_no_marker(tmp_path):

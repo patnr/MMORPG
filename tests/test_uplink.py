@@ -14,7 +14,7 @@ def test_uplink_init_defaults():
     ul = Uplink("testhost")
 
     assert ul.host == "testhost"
-    assert ul.progbar is False
+    assert ul.progbar is True
     assert ul.dry is False
     assert ul.use_M is True
 
