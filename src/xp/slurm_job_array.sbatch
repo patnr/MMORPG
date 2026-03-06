@@ -7,10 +7,4 @@
 # - Must insert shebang into exprm_wrapper.py after python runtime
 # - Must fix sys.path[0] since SLURM copies script to /var/spool/slurmd/job1297113
 
-set -eu -o pipefail # NB: no -f (need filename expansion/globbing)
-module --quiet reset  # Reset the modules to the system default
-
-# DATASETS=(xps/*)
-# INPUT=${DATASETS[$SLURM_ARRAY_TASK_ID]}
-
 "$@"/$SLURM_ARRAY_TASK_ID
