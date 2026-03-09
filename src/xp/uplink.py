@@ -3,10 +3,38 @@
 Requires rsync and ssh access to the server.
 """
 
-from contextlib import contextmanager
-from pathlib import Path
 import os
 import subprocess
+from contextlib import contextmanager
+from pathlib import Path
+
+
+def resolve_host_glob(host: str) -> str:
+    """Resolve wildcard host pattern from SSH config.
+
+    Args:
+        host: Host pattern, potentially ending with '*' wildcard
+
+    Returns:
+        Resolved hostname
+
+    Raises:
+        ValueError: If wildcard cannot be resolved or SSH config not found
+    """
+    if not host.endswith("*"):
+        return host
+
+    ssh_config_path = Path("~").expanduser() / ".ssh" / "config"
+    if not ssh_config_path.exists():
+        raise ValueError(f"SSH config not found at {ssh_config_path}")
+
+    prefix = host[:-1]
+    for line in ssh_config_path.read_text().splitlines():
+        if line.startswith("Host " + prefix):
+            resolved = line.split()[1]
+            return resolved
+
+    raise ValueError(f"Could not resolve wildcard host '{host}' in SSH config")
 
 
 class Uplink:
@@ -35,22 +63,57 @@ class Uplink:
     def __repr__(self):
         return f"Uplink(host='{self.host}', progbar={self.progbar}, dry={self.dry}, use_M={self.use_M})"
 
+    def check_reachable(self, timeout: int = 5) -> tuple[bool, str | None]:
+        """Check if host is reachable via SSH.
+
+        Args:
+            timeout: Connection timeout in seconds
+
+        Returns:
+            Tuple of (is_reachable, error_message)
+        """
+        try:
+            subprocess.run(
+                [
+                    *self.ssh_M.split(),
+                    "-o",
+                    "BatchMode=yes",
+                    "-o",
+                    f"ConnectTimeout={timeout}",
+                    self.host,
+                    "true",
+                ],
+                check=True,
+                capture_output=True,
+                timeout=timeout * 2,
+            )
+            return True, None
+        except subprocess.CalledProcessError as e:
+            return False, f"SSH connection failed: {type(e).__name__}"
+        except FileNotFoundError:
+            return False, "SSH command not found"
+        except subprocess.TimeoutExpired:
+            return False, "Connection timeout"
+
     def cmd(self, cmd: str, login_shell=True, **kwargs):
+        """Run a command on the remote host."""
         if isinstance(cmd, list):
             cmd = " ".join([str(x) for x in cmd])
         if login_shell:
             # sources ~/.bash_profile or ~/.profile, which may or not include ~/.bashrc
             cmd = f"bash -l -c '{cmd}'"
 
-        kwargs = {**dict(check=True, text=True, capture_output=True), **kwargs}
+        kwargs = {**{"check": True, "text": True, "capture_output": True}, **kwargs}
         try:
             return subprocess.run([*self.ssh_M.split(), self.host, cmd], **kwargs)
         except subprocess.CalledProcessError as error:
+            # If capture_output is True stderr does not show (unhelpful upon error)
             if kwargs.get("capture_output"):
                 print(error.stderr)
             raise
 
-    def rsync(self, src, dst, opts=(), reverse=False):
+    def rsync(self, src: Path | str, dst: Path | str, opts=(), reverse=False):
+        """Run rsync for `src` and `dst`."""
         # Prepare: opts
         if isinstance(opts, str):
             opts = opts.split()
@@ -74,16 +137,10 @@ class Uplink:
         has_prog2 = (v[0] >= 3) and (v[1] >= 1)
 
         # Show progress
-        if self.progbar and has_prog2:
-            progbar = ("--info=progress2", "--no-inc-recursive")
-        else:
-            progbar = []
+        progbar = ("--info=progress2", "--no-inc-recursive") if self.progbar and has_prog2 else []
 
         # Use multiplex
-        if self.use_M:
-            multiplex = "-e", self.ssh_M
-        else:
-            multiplex = []
+        multiplex = ("-e", self.ssh_M) if self.use_M else []
 
         # Assemble command
         cmd = ["rsync", "-azhL", *progbar, *multiplex, *opts, src, dst]
@@ -105,7 +162,8 @@ class Uplink:
         # Sync other.name -> target/
         for p in other:
             p = Path(p).expanduser().resolve()
-            assert p != Path.home(), "You probably do not want to sync your entire home dir."
+            if p == Path.home():
+                raise ValueError("You probably do not want to sync your entire home dir.")
             self.rsync(f"{p}/", Path(target_dir) / p.name)
 
         # Reverse sync (i.e. download results) when exiting

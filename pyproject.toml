@@ -31,8 +31,45 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "ipdb>=0.13.13",
     "pytest>=9.0.2",
+    "ruff>=0.8.0",
 ]
 
 [tool.ruff]
 line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    # "N",      # pep8-naming
+    "UP",     # pyupgrade
+    # "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    # "SIM",    # flake8-simplify
+    # "NPY",    # numpy-specific rules
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["xp"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.pytest.ini_options]
+# Pytest configuration
+markers = [
+    "slow: marks tests as slow (deselected by default, use -m slow to run)",
+    "integration: marks tests as integration tests",
+]
+# By default, exclude slow tests. To run them: pytest -m slow or pytest -m "slow or not slow"
+addopts = "-m 'not slow'"
