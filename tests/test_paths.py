@@ -1,8 +1,6 @@
 """Tests for path resolution and directory management."""
 
-from datetime import datetime
-
-import xp
+import mmorpg
 
 
 def test_find_proj_dir_finds_pyproject(tmp_path):
@@ -20,7 +18,7 @@ def test_find_proj_dir_finds_pyproject(tmp_path):
     script.write_text("# test script")
 
     # Should find the root
-    result = xp.find_proj_dir(script)
+    result = mmorpg.find_proj_dir(script)
     assert result == root
 
 
@@ -34,7 +32,7 @@ def test_find_proj_dir_finds_requirements_txt(tmp_path):
     script = subdir / "run.py"
     script.write_text("# script")
 
-    result = xp.find_proj_dir(script)
+    result = mmorpg.find_proj_dir(script)
     assert result == root
 
 
@@ -48,7 +46,7 @@ def test_find_proj_dir_finds_setup_py(tmp_path):
     script = subdir / "main.py"
     script.write_text("# main")
 
-    result = xp.find_proj_dir(script)
+    result = mmorpg.find_proj_dir(script)
     assert result == root
 
 
@@ -62,7 +60,7 @@ def test_find_proj_dir_finds_git(tmp_path):
     script = subdir / "script.py"
     script.write_text("# script")
 
-    result = xp.find_proj_dir(script)
+    result = mmorpg.find_proj_dir(script)
     assert result == root
 
 
@@ -82,7 +80,7 @@ def test_find_proj_dir_prefers_shallow_marker(tmp_path):
     script.write_text("# script")
 
     # Should find the inner (shallowest) one
-    result = xp.find_proj_dir(script)
+    result = mmorpg.find_proj_dir(script)
     assert result == inner
 
 
@@ -99,7 +97,7 @@ def test_find_proj_dir_marker_priority(tmp_path):
     script = subdir / "script.py"
     script.write_text("# script")
 
-    result = xp.find_proj_dir(script)
+    result = mmorpg.find_proj_dir(script)
     assert result == root
 
 
@@ -122,7 +120,7 @@ def test_find_latest_run(tmp_path):
     # Also create a non-timestamp dir (should be ignored)
     (root / "not_a_timestamp").mkdir()
 
-    latest = xp.find_latest_run(root)
+    latest = mmorpg.find_latest_run(root)
     assert latest == "2024-01-16_at_09-15-00"
 
 
@@ -134,7 +132,7 @@ def test_find_latest_run_single_entry(tmp_path):
     ts = "2024-06-01_at_12-00-00"
     (root / ts).mkdir()
 
-    latest = xp.find_latest_run(root)
+    latest = mmorpg.find_latest_run(root)
     assert latest == ts
 
 
@@ -150,7 +148,7 @@ def test_find_latest_run_ignores_invalid_formats(tmp_path):
     (root / "results").mkdir()
     (root / "2024-02-20_at_15-00-00").mkdir()  # Latest valid
 
-    latest = xp.find_latest_run(root)
+    latest = mmorpg.find_latest_run(root)
     assert latest == "2024-02-20_at_15-00-00"
 
 
@@ -163,7 +161,7 @@ def test_find_proj_dir_returns_none_if_no_marker(tmp_path):
     script.write_text("# script")
 
     # Search will go up to tmp_path and beyond, may find git repo or nothing
-    result = xp.find_proj_dir(script)
+    result = mmorpg.find_proj_dir(script)
     # If we're in a git repo, it might find it; otherwise None
     # This test documents the behavior
     assert result is None or result.exists()

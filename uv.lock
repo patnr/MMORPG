@@ -401,6 +401,55 @@ wheels = [
 ]
 
 [[package]]
+name = "mmorpg"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "colorama" },
+    { name = "matplotlib" },
+    { name = "matrepr" },
+    { name = "mplcyberpunk" },
+    { name = "numba" },
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pathos" },
+    { name = "sparse" },
+    { name = "threadpoolctl" },
+    { name = "tqdm" },
+    { name = "xarray" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ipdb" },
+    { name = "pytest" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "colorama", specifier = ">=0.4.6" },
+    { name = "matplotlib", specifier = ">=3.10.8" },
+    { name = "matrepr", specifier = ">=1.0.1" },
+    { name = "mplcyberpunk", specifier = ">=0.7.6" },
+    { name = "numba", specifier = ">=0.54" },
+    { name = "numpy", specifier = ">=2.3.5" },
+    { name = "pandas", specifier = ">=2.3.3" },
+    { name = "pathos", specifier = ">=0.3.4" },
+    { name = "sparse", specifier = "==0.15.4" },
+    { name = "threadpoolctl", specifier = ">=3.6.0" },
+    { name = "tqdm", specifier = ">=4.67.1" },
+    { name = "xarray", specifier = ">=2025.12.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "ipdb", specifier = ">=0.13.13" },
+    { name = "pytest", specifier = ">=9.0.2" },
+    { name = "ruff", specifier = ">=0.8.0" },
+]
+
+[[package]]
 name = "mplcyberpunk"
 version = "0.7.6"
 source = { registry = "https://pypi.org/simple" }
@@ -983,53 +1032,4 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/d3/af/7b945f331ba8911fdfff2fdfa092763156119f124be1ba4144615c540222/xarray-2025.12.0.tar.gz", hash = "sha256:73f6a6fadccc69c4d45bdd70821a47c72de078a8a0313ff8b1e97cd54ac59fed", size = 3082244 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d5/e4/62a677feefde05b12a70a4fc9bdc8558010182a801fbcab68cb56c2b0986/xarray-2025.12.0-py3-none-any.whl", hash = "sha256:9e77e820474dbbe4c6c2954d0da6342aa484e33adaa96ab916b15a786181e970", size = 1381742 },
-]
-
-[[package]]
-name = "xp"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "colorama" },
-    { name = "matplotlib" },
-    { name = "matrepr" },
-    { name = "mplcyberpunk" },
-    { name = "numba" },
-    { name = "numpy" },
-    { name = "pandas" },
-    { name = "pathos" },
-    { name = "sparse" },
-    { name = "threadpoolctl" },
-    { name = "tqdm" },
-    { name = "xarray" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "ipdb" },
-    { name = "pytest" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "colorama", specifier = ">=0.4.6" },
-    { name = "matplotlib", specifier = ">=3.10.8" },
-    { name = "matrepr", specifier = ">=1.0.1" },
-    { name = "mplcyberpunk", specifier = ">=0.7.6" },
-    { name = "numba", specifier = ">=0.54" },
-    { name = "numpy", specifier = ">=2.3.5" },
-    { name = "pandas", specifier = ">=2.3.3" },
-    { name = "pathos", specifier = ">=0.3.4" },
-    { name = "sparse", specifier = "==0.15.4" },
-    { name = "threadpoolctl", specifier = ">=3.6.0" },
-    { name = "tqdm", specifier = ">=4.67.1" },
-    { name = "xarray", specifier = ">=2025.12.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "ipdb", specifier = ">=0.13.13" },
-    { name = "pytest", specifier = ">=9.0.2" },
-    { name = "ruff", specifier = ">=0.8.0" },
 ]

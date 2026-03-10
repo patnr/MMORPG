@@ -78,15 +78,15 @@ def find_proj_dir(script: Path):
                 return d
 
 
-def save(xps, data_dir, nBatch):
-    print(f"Saving {len(xps)} xp's to", data_dir)
+def save(inputs, data_dir, nBatch):
+    print(f"Saving {len(inputs)} inputs to", data_dir)
     ceil_division = lambda a, b: (a + b - 1) // b  # noqa: E731
-    batch_size = ceil_division(len(xps), nBatch)
-    nBatch = ceil_division(len(xps), batch_size)
+    batch_size = ceil_division(len(inputs), nBatch)
+    nBatch = ceil_division(len(inputs), batch_size)
 
     def save_batch(i):
-        xp_batch = xps[i * batch_size : (i + 1) * batch_size]
-        (data_dir / "xps" / str(i)).write_bytes(dill.dumps(xp_batch))
+        xp_batch = inputs[i * batch_size : (i + 1) * batch_size]
+        (data_dir / "inputs" / str(i)).write_bytes(dill.dumps(xp_batch))
 
     # saving can be slow ⇒ mp
     # from .local_mp import mp
@@ -125,7 +125,7 @@ def install_deps(remote: Uplink, remote_dir: Path, proj_dir: Path):
 def submit_and_monitor_slurm(remote, cmd, remote_dir, slurm_kws):
     # Unpack
     nCPU = cmd[-1]
-    nJobs = int(remote.cmd(f"ls {remote_dir}/xps | wc -l").stdout.strip())
+    nJobs = int(remote.cmd(f"ls {remote_dir}/inputs | wc -l").stdout.strip())
 
     defaults = {
         # These CLI options take precedence over #SBATCH directives
@@ -155,7 +155,7 @@ def submit_and_monitor_slurm(remote, cmd, remote_dir, slurm_kws):
 
     # Submit
     job_id = remote.cmd(
-        ["sbatch", *slurm_opts, "slurm_job_array.sbatch", *cmd, str(remote_dir / "xps")],
+        ["sbatch", *slurm_opts, "slurm_job_array.sbatch", *cmd, str(remote_dir / "inputs")],
         cwd=remote_dir,
     )
     print(job_id.stdout, end="")
@@ -192,7 +192,7 @@ def submit_and_monitor_slurm(remote, cmd, remote_dir, slurm_kws):
 
 def dispatch(
     fun: callable,
-    xps: list,
+    inputs: list,
     host: str = "SUBPROCESS",
     script: Path = None,
     nCPU: int = None,
@@ -206,18 +206,18 @@ def dispatch(
     """
     Execute function over parameter sets on remote hosts/clusters (or locally).
 
-    Essentially: `[fun(**kwargs) for kwargs in xps]`.
+    Essentially: `[fun(**kwargs) for kwargs in inputs]`.
 
     Parameters
     ----------
     fun : callable
         Function to apply to each experiment.
-    xps : list
+    inputs : list
         Job array, i.e. list of (parameter) dictionaries to pass to `fun`.
     host : str, optional
         Remote server, e.g. "cno-006".
         Can also be an `ssh/.config` alias, and supports wildcards, e.g., "my-gcp*".
-        See `xp/setup-compute-node.sh` for instructions on setting up a Google cloud VM.
+        See `setup-compute-node.sh` for instructions on setting up a Google cloud VM.
         Default is `"SUBPROCESS"`, i.e. local execution.
         Another value commonly used for testing is `"localhost"`.
     script : Path, optional
@@ -228,9 +228,9 @@ def dispatch(
         Number of CPUs used by python's multiprocessing (locally, on a given server, or cluster node).
         Defaults to `None` ⇒ auto-detect.
     nBatch : int, optional
-        Number of batches to split `xps` job array into. Useful for SLURM clusters.
+        Number of batches to split `inputs` job array into. Useful for SLURM clusters.
         Note: this enables *nested* multiprocessing (SLURM + python).
-        * Let `N` be the total available CPUs, and suppose `len(xps) >> N` for simplicity.
+        * Let `N` be the total available CPUs, and suppose `len(inputs) >> N` for simplicity.
           Example: NORCE HPC cluster has 3584 CPUs distributed as 14 nodes * 256 CPUs/node.
         * Maybe don't want to hog all available CPUs? Not an important consideration if using `--nice`.
         * Want `nBatch * nCPU == n N` for some integer `n > 0` to make use of all CPUs.
@@ -240,7 +240,7 @@ def dispatch(
         * It might seem that you could set `nCPU=1` and use `nBatch=N`, however
           - Must keep `nBatch < 1000` due to queue system limit.
           - SLURM is significantly slower in distributing jobs than py multiprocessing.
-          - Saving many `xps` is slow (even though total data is same), even w/ multiprocessing.
+          - Saving many `inputs` is slow (even though total data is same), even w/ multiprocessing.
         * Still, want at least `nBatch > 4x nNodes`, to get some load balancing by SLURM.
 
         Defaults: `56` for NORCE HPC, `1` for local/other.
@@ -263,7 +263,7 @@ def dispatch(
         You can chose to replace this with your custom tags, for example: ["v1"].
     data_root : Path, optional
         Local root for experiment data. Default: `~/data`
-        Gets populated by `xps/`, `res/`, the `proj_dir`, and `slurm_job_array.sbatch`.
+        Gets populated by `inputs/`, `outputs/`, the `proj_dir`, and `slurm_job_array.sbatch`.
     data_root_on_remote : Path, optional
         Remote root for data. Auto-set: `${USERWORK}` (NORCE HPC) or `${HOME}/data` (other).
 
@@ -283,8 +283,8 @@ def dispatch(
     # Validate inputs before expensive operations
     if not callable(fun):
         raise TypeError(f"fun must be callable, got {type(fun)}")
-    if not xps:
-        raise ValueError("xps list cannot be empty")
+    if not inputs:
+        raise ValueError("inputs list cannot be empty")
 
     # Get path to `script`
     if script is None:
@@ -306,8 +306,8 @@ def dispatch(
     else:
         data_dir /= datetime.now().strftime(timestamp)
     data_dir.mkdir(parents=True)
-    (data_dir / "xps").mkdir()
-    (data_dir / "res").mkdir()
+    (data_dir / "inputs").mkdir()
+    (data_dir / "outputs").mkdir()
 
     # Make relative
     script = proj_dir.stem / script.relative_to(proj_dir)
@@ -316,9 +316,9 @@ def dispatch(
     ignores = shutil.ignore_patterns("*.pyc", "__pycache__")
     shutil.copytree(proj_dir, data_dir / proj_dir.stem, ignore=ignores)
     shutil.copy(Path(__file__).parent / "slurm_job_array.sbatch", data_dir)
-    shutil.copy(Path(__file__).parent / "exprm_wrapper.py", data_dir / script.parent)
+    shutil.copy(Path(__file__).parent / "batch_runner.py", data_dir / script.parent)
 
-    # Save xps -- partitioned for node distribution
+    # Save inputs -- partitioned for node distribution
     if host and "hpc.intra.norceresearch" in host:
         if nBatch is None:
             nBatch = 55
@@ -327,10 +327,10 @@ def dispatch(
             nCPU = 64
     elif nBatch is None:
         nBatch = 1
-    save(xps, data_dir, nBatch)
+    save(inputs, data_dir, nBatch)
 
     def concat_cmd(python, scrpt):
-        args = [python, scrpt.parent / "exprm_wrapper.py", scrpt.stem, fun.__name__, nCPU]
+        args = [python, scrpt.parent / "batch_runner.py", scrpt.stem, fun.__name__, nCPU]
         args = [str(x) for x in args]
         return args
 
@@ -338,9 +338,9 @@ def dispatch(
     if host in ["SUBPROCESS", None]:
         # subprocessing is unecessary, but using a similar code path (as remote) facilitates debugging.
         cmd = concat_cmd(sys.executable, data_dir / script)
-        for xp in (data_dir / "xps").iterdir():  # or sorted(--"--, key=lambda p: int(p.name)):
+        for inpt in (data_dir / "inputs").iterdir():  # or sorted(--"--, key=lambda p: int(p.name)):
             try:
-                subprocess.run(cmd + [xp], check=True, cwd=Path.cwd())
+                subprocess.run(cmd + [inpt], check=True, cwd=Path.cwd())
             except subprocess.CalledProcessError:
                 raise
 
@@ -371,6 +371,6 @@ def dispatch(
 
             else:
                 # Run directly (on remote host)
-                for xp in (data_dir / "xps").iterdir():
-                    remote.cmd(cmd + [str(remote_dir / "xps" / xp.name)], capture_output=False)
+                for inpt in (data_dir / "inputs").iterdir():
+                    remote.cmd(cmd + [str(remote_dir / "inputs" / inpt.name)], capture_output=False)
     return data_dir

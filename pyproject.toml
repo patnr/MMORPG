@@ -1,5 +1,5 @@
 [project]
-name = "xp"
+name = "MMORPG"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -21,9 +21,6 @@ dependencies = [
     "numba>=0.54",
     "numpy>=2.3.5",         # https://github.com/numpy/numpy/issues/29820
 ]
-
-[project.scripts]
-xp = "xp:main"
 
 [build-system]
 requires = ["uv_build>=0.9.18,<0.10.0"]
@@ -58,7 +55,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["xp"]
+known-first-party = ["mmorpg"]
 
 [tool.ruff.format]
 quote-style = "double"

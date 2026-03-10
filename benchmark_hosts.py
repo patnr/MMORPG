@@ -8,7 +8,7 @@ import time
 import numpy as np
 import pandas as pd
 
-from xp import dict_prod, dispatch, load_data
+from mmorpg import dict_prod, dispatch, load_data
 
 
 def experiment(MB=1, seconds=10, job_nr=3000):
@@ -34,20 +34,21 @@ def experiment(MB=1, seconds=10, job_nr=3000):
 
 
 if __name__ == "__main__":
-    xps = dict_prod(
+    inputs = dict_prod(
         MB=[1],
         seconds=[10],
         job_nr=list(range(3 * 1024)),
     )
 
-    # host = None
+    host = None
     # host = "cno-0001" # has 128 CPUs, runs in 3:20
 
     # With all CPUs available, and fine-tuned {nBatch,nCPU} running in 0:17 is achievable:
-    host = "login-1.hpc.intra.norceresearch.no"
+    # host = "login-1.hpc.intra.norceresearch.no"
 
-    dir = dispatch(experiment, xps, host)
-    res = load_data(dir / "res")
+    dir = dispatch(experiment, inputs, host)
+    outputs = load_data(dir / "outputs")
 
-    df = pd.concat([pd.DataFrame(xps), pd.DataFrame.from_records(res)], axis=1)
+    df = pd.concat([pd.DataFrame(inputs),
+                    pd.DataFrame.from_records(outputs)], axis=1)  # fmt:skip
     print(df)

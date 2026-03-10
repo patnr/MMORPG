@@ -2,7 +2,7 @@
 
 <img src="icon.png" alt="icon" width="200" align="left">
 
-MMORPG (Massively Multiple Online Runs in Python with Graphs)
+MMORPG (Manage Multitudes of Online Runs in Python and Graph them)
 runs independent simulation experiments in parallel and remotely
 (on a single host or a SLURM cluster), automating the work of push, pull, track, save
 and load for parameters and results, with minimal code (mental) overhead:
@@ -49,22 +49,19 @@ Moreover, the problem and seed parameter space should be thoroughly sampled
 
 ## Alternatives
 
-- **MMORPG**:
-  Python-native, manages parameters and results, minimal code overhead, supports remote/HPC execution (via rsync/ssh), no dashboard, low-medium setup.
-- **Weights & Biases / MLflow / Neptune.ai**:
-  Advanced experiment/parameter tracking, rich dashboards, Python APIs (extra config needed), remote execution for ML (not HPC), medium-high setup.
-- **Ray / Dask**:
-  Distributed parameter sweeps, web dashboards, Python-native, remote/cloud/cluster execution, high setup complexity.
-- **Snakemake / Nextflow**:
-  Workflow-based param management (config files), some visualization, Snakemake is Pythonic, strong HPC/remote support, medium-high setup.
-- **Sacred / Hydra**:
-  Hierarchical config management, minimal dashboard (Sacred only), Python-native, no remote/HPC, low-medium setup.
-- **Joblib**:
-  Simple param mapping, no dashboard, Python-native, local parallel only, low setup.
-- **GNU Parallel / xargs + tmux/screen**:
-  Manual param management, no dashboard, not Python-native, remote via manual SSH, low setup, shell skills needed.
+**MMORPG** is comparatively lightweight despite supporting HPC and heterogeneous arrays.
+The ML space contains [many good alternatives](https://dagshub.com/blog/how-to-compare-ml-experiment-tracking-tools-to-fit-your-data-science-workflow/),
+notably **Weights & Biases / MLflow / Neptune.ai / DAGsHub**.
+These tend to offer advanced experiment/parameter tracking and optimisation, and rich dashboards,
+but are less focused on the distributed computing itself,
+which is the purview of **Ray / Dask**, which scale from GPU to clusters.
+One ingredient not offered by MMORPG is pipeline workflow orchestration, as in Snakemake/Nextflow.
 
-Also see: [comparison with ML-domain tools](https://dagshub.com/blog/how-to-compare-ml-experiment-tracking-tools-to-fit-your-data-science-workflow/)
+### Roadmap
+
+It would be interesting to support
+`joblib`, `xargs` or GNU parallel as alternatives to `multiprocessing`,
+and HTCondor, Kubernetes or AWS Batch as alternatives to SLURM.
 
 ## Development
 

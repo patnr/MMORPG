@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from xp.uplink import Uplink
+from mmorpg.uplink import Uplink
 
 
 def test_uplink_init_defaults():

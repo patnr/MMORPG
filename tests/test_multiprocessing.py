@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from xp.local_mp import mp
+from mmorpg.local_mp import mp
 
 
 def square(x):

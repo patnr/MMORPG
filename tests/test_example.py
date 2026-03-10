@@ -84,42 +84,42 @@ class TestListExperiments:
 
     def test_experiment_count(self):
         """Test that correct number of experiments is generated."""
-        xps = list_experiments()
+        inputs = list_experiments()
         # 2 methods * 3 N values * 100000 seeds, minus deterministic duplicates
         # deterministic gets 3 configs (one per N, all with seed=None)
         # stochastic gets 3*100000 configs
-        assert len(xps) == 3 + 3 * 100000
+        assert len(inputs) == 3 + 3 * 100000
 
     def test_seed_handling_deterministic(self):
         """Test deterministic experiments have seed=None."""
-        xps = list_experiments()
-        deterministic = [x for x in xps if x["method"] == "deterministic"]
+        inputs = list_experiments()
+        deterministic = [x for x in inputs if x["method"] == "deterministic"]
 
         assert len(deterministic) == 3
         assert all(x["seed"] is None for x in deterministic)
 
     def test_no_duplicates(self):
         """Test that there are no duplicate experiments."""
-        xps = list_experiments()
+        inputs = list_experiments()
         # Convert to tuples for comparison
-        xps_tuples = [tuple(sorted(x.items())) for x in xps]
-        assert len(xps_tuples) == len(set(xps_tuples))
+        input_tuples = [tuple(sorted(x.items())) for x in inputs]
+        assert len(input_tuples) == len(set(input_tuples))
 
     def test_all_experiments_valid(self):
         """Test that all generated experiments can be run."""
-        xps = list_experiments()[:10]  # Use subset to speed up test
-        for kwargs in xps:
+        inputs = list_experiments()[:10]  # Use subset to speed up test
+        for kwargs in inputs:
             result = experiment(**kwargs)
             assert "estimate" in result
             assert "error" in result
 
     def test_experiment_keys(self):
         """Test that all experiments have required keys."""
-        xps = list_experiments()
+        inputs = list_experiments()
         required_keys = {"method", "N", "seed"}
 
-        for xp in xps:
-            assert set(xp.keys()) == required_keys
+        for dct in inputs:
+            assert set(dct.keys()) == required_keys
 
 
 class TestIntegration:
@@ -129,16 +129,16 @@ class TestIntegration:
         """Checking working input to pandas and formatting"""
         import pandas as pd
 
-        xps = list_experiments()[:10]  # Use subset to speed up test
-        res = [experiment(**kwargs) for kwargs in xps]
+        inputs = list_experiments()[:10]  # Use subset to speed up test
+        result = [experiment(**kwargs) for kwargs in inputs]
 
         # Create DataFrame as done in example.py
-        df = pd.DataFrame(xps).set_index(list(xps[0]))
-        df = pd.DataFrame.from_records(res, index=df.index)
+        df = pd.DataFrame(inputs).set_index(list(inputs[0]))
+        df = pd.DataFrame.from_records(result, index=df.index)
 
         # Verify DataFrame was created successfully
         assert isinstance(df, pd.DataFrame)
-        assert len(df) == len(xps)
+        assert len(df) == len(inputs)
         assert all(col in df.columns for col in ["estimate", "error"])
 
     @pytest.fixture(scope="class")
@@ -172,10 +172,10 @@ class TestIntegration:
         import warnings
         from pathlib import Path
 
-        from xp import dispatch, load_data
+        from mmorpg import dispatch, load_data
 
         # Use same experiments as reference (subset for speed)
-        xps = list_experiments()[:10]
+        inputs = list_experiments()[:10]
 
         # Run dispatch for this host
         try:
@@ -183,14 +183,14 @@ class TestIntegration:
                 data_root = Path(tmpdir)
                 data_dir = dispatch(
                     experiment,
-                    xps,
+                    inputs,
                     host=host,
                     data_root=data_root,
                     nCPU=2,
                 )
 
                 # Load results
-                results = load_data(data_dir / "res", pbar=False)
+                results = load_data(data_dir / "outputs", pbar=False)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
             # Host is unreachable - skip test with warning
             msg = f"Host '{host}' unreachable: {type(e).__name__}"
@@ -205,5 +205,5 @@ class TestIntegration:
             np.testing.assert_allclose(
                 result["estimate"],
                 reference["estimate"],
-                err_msg=f"Host '{host}' gave different estimate for {xps}",
+                err_msg=f"Host '{host}' gave different estimate for {inputs}",
             )
