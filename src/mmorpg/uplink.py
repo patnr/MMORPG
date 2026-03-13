@@ -114,6 +114,13 @@ class Uplink:
                 print(error.stderr)
             raise
 
+    def shell_expand(self, path: str) -> str:
+        """Evaluate path with shell variable expansion (e.g., ~, $HOME)."""
+        # Some uses of this method may be unecessary since ${some_envar}
+        # could work perfectly well as-is, getting resolved when they are used,
+        # but it is perhaps more robust to resolve upfront.
+        return self.cmd("echo " + path).stdout.splitlines()[0]
+
     def rsync(self, src: Path | str, dst: Path | str, opts=(), reverse=False):
         """Run rsync for `src` and `dst`."""
         # Prepare: opts

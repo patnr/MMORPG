@@ -153,11 +153,7 @@ def install_deps(
         capture_output=False,  # simply print
     )
 
-    # Evaluate path variables (~ $HOME etc) and get python path
-    venv_expanded = remote.cmd("echo " + venv).stdout.splitlines()[0]
-    py = f"{venv_expanded}/bin/python"
-
-    return py
+    return f"{remote.shell_expand(venv)}/bin/python"
 
 
 def submit_and_monitor_slurm(remote, cmd, remote_dir, slurm_kws):
@@ -407,7 +403,7 @@ def dispatch(
             data_root_on_remote = (
                 "${USERWORK}" if "hpc.intra.norceresearch" in host else "${HOME}/data"
             )
-        data_root_on_remote = remote.cmd("echo " + data_root_on_remote).stdout.splitlines()[0]
+        data_root_on_remote = remote.shell_expand(data_root_on_remote)
         remote_dir = Path(data_root_on_remote) / data_dir.relative_to(data_root)
 
         with remote.sym_sync(data_dir, remote_dir):  # up- & download
