@@ -156,19 +156,12 @@ class Uplink:
             return None
 
     @contextmanager
-    def sym_sync(self, target_dir: Path | str, source_dir: Path, *other):
-        """Upload `source_dir` and all `other` to `target_dir` on host. Download upon exit/exception."""
+    def sym_sync(self, source_dir: Path, target_dir: Path | str):
+        """Upload `source_dir` to `target_dir` on host. Download upon exit/exception."""
         # Sync source -> target
         print(f"Sending {source_dir}")
         self.cmd(f"mkdir -p {target_dir}")
         self.rsync(f"{source_dir}/", target_dir)
-        # Sync other.name -> target/
-        for p in other:
-            print(f"Sending {p}")
-            p = Path(p).expanduser().resolve()
-            if p == Path.home():
-                raise ValueError("You probably do not want to sync your entire home dir.")
-            self.rsync(f"{p}/", Path(target_dir) / p.name)
 
         # Reverse sync (i.e. download results) when exiting
         try:

@@ -365,7 +365,7 @@ def dispatch(
     # Copy resources to data_dir
     ignores = shutil.ignore_patterns("*.pyc", "__pycache__")
     # Follow symlinks during copy (they'll be regular dirs/files in data_dir)
-    shutil.copytree(proj_dir, data_dir / proj_dir.stem, ignore=ignores)
+    shutil.copytree(proj_dir, data_dir / proj_dir.stem, ignore=ignores, symlinks=False)
     shutil.copy(Path(__file__).parent / "slurm_job_array.sbatch", data_dir)
     shutil.copy(Path(__file__).parent / "batch_runner.py", data_dir / script.parent)
 
@@ -397,22 +397,20 @@ def dispatch(
 
     # Run remotely
     else:
+        # Connect
         if host.endswith("*"):
             host = resolve_host_glob(host)
         remote = Uplink(host)
 
-        # data_root_on_remote
+        # Get remote_dir
         if data_root_on_remote is None:
             data_root_on_remote = (
                 "${USERWORK}" if "hpc.intra.norceresearch" in host else "${HOME}/data"
             )
-        # Evaluate. Maybe unecessary since ${some_envar} could work below as-is
         data_root_on_remote = remote.cmd("echo " + data_root_on_remote).stdout.splitlines()[0]
-        # remote_dir
         remote_dir = Path(data_root_on_remote) / data_dir.relative_to(data_root)
 
-        # Sync on enter & exit
-        with remote.sym_sync(remote_dir, data_dir, proj_dir):
+        with remote.sym_sync(data_dir, remote_dir):  # up- & download
             py = install_deps(remote, remote_dir / proj_dir.stem, setup, venv)
             cmd = concat_cmd(py, remote_dir / script)
 
