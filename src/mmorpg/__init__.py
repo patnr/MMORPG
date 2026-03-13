@@ -10,6 +10,7 @@ from pathlib import Path
 import dill
 from tqdm.auto import tqdm
 
+from . import setups
 from .uplink import Uplink, resolve_host_glob
 
 timestamp = "%Y-%m-%d_at_%H-%M-%S"
@@ -109,16 +110,53 @@ def get_cluster_resources(remote: Uplink):
             return cpus, nodes
 
 
-def install_deps(remote: Uplink, remote_dir: Path, proj_dir: Path):
-    # Install (potentially outdated) deps (from lockfile)
-    # PS: Pre-install `uv` using `wget -qO- https://astral.sh/uv/install.sh | sh`
-    venv = f"~/.cache/venvs/{proj_dir.stem}"
+def install_deps(
+    remote: Uplink,
+    proj_on_remote: Path,
+    setup: list[str] | str,
+    venv: str = None,
+):
+    """Install dependencies on remote using provided setup commands.
+
+    Parameters
+    ----------
+    remote : Uplink
+        Remote connection.
+    proj_on_remote : Path
+        Local project directory.
+    setup : list[str], optional
+        Commands to install dependencies and return python path.
+        Use {proj_name} and {venv} placeholders which get replaced automatically.
+    venv : str, optional
+        Path to virtual environment directory. Defaults to "~/.cache/venvs/{proj_on_remote.stem}".
+
+    Returns
+    -------
+    str
+        Path to python executable in the created environment.
+    """
+    # Set defaults for venv and setup
+    if venv is None:
+        venv = f"~/.cache/venvs/{proj_on_remote.stem}"
+    if isinstance(setup, str):
+        setup = getattr(setups, setup)
+
+    # Replace placeholders in setup
+    def interp(cmd):
+        return cmd.replace("{proj_name}", proj_on_remote.stem).replace("{venv}", venv)
+
+    setup = [interp(cmd) for cmd in setup]
+
+    # Run installation commands
     remote.cmd(
-        f"command cd {remote_dir / proj_dir.stem}; UV_PROJECT_ENVIRONMENT={venv} uv sync",
+        f"command cd {proj_on_remote}; " + " && ".join(setup),
         capture_output=False,  # simply print
     )
-    venv = remote.cmd("echo " + venv).stdout.splitlines()[0]  # eval ~ $HOME etc
-    py = f"{venv}/bin/python"
+
+    # Evaluate path variables (~ $HOME etc) and get python path
+    venv_expanded = remote.cmd("echo " + venv).stdout.splitlines()[0]
+    py = f"{venv_expanded}/bin/python"
+
     return py
 
 
@@ -202,6 +240,8 @@ def dispatch(
     data_root: Path = Path.home() / "data",
     data_root_on_remote: Path = None,
     slurm_kws: dict = None,
+    setup: list[str] | str = "uv",
+    venv: str = None,
 ):
     """
     Execute function over parameter sets on remote hosts/clusters (or locally).
@@ -266,6 +306,16 @@ def dispatch(
         Gets populated by `inputs/`, `outputs/`, the `proj_dir`, and `slurm_job_array.sbatch`.
     data_root_on_remote : Path, optional
         Remote root for data. Auto-set: `${USERWORK}` (NORCE HPC) or `${HOME}/data` (other).
+    setup : list[str], optional
+        Commands to run on remote before all of the jobs to setup environment and install dependencies.
+        See `setups.py` for examples with uv, poetry, conda, and pip.
+
+    venv : str or list of str, optional
+        Path to virtual environment directory.
+        Defaults is the central location "~/.cache/venvs/{proj_dir.stem}"
+        (rather than `{proj_dir}/.venv` or a hash location as used by poetry)
+        which avoids re-creating the venv for every upload.
+        Use {proj_name} and {venv} placeholders in setup.
 
     Returns
     -------
@@ -314,6 +364,7 @@ def dispatch(
 
     # Copy resources to data_dir
     ignores = shutil.ignore_patterns("*.pyc", "__pycache__")
+    # Follow symlinks during copy (they'll be regular dirs/files in data_dir)
     shutil.copytree(proj_dir, data_dir / proj_dir.stem, ignore=ignores)
     shutil.copy(Path(__file__).parent / "slurm_job_array.sbatch", data_dir)
     shutil.copy(Path(__file__).parent / "batch_runner.py", data_dir / script.parent)
@@ -362,7 +413,7 @@ def dispatch(
 
         # Sync on enter & exit
         with remote.sym_sync(remote_dir, data_dir, proj_dir):
-            py = install_deps(remote, remote_dir, proj_dir)
+            py = install_deps(remote, remote_dir / proj_dir.stem, setup, venv)
             cmd = concat_cmd(py, remote_dir / script)
 
             if "hpc.intra.norceresearch" in host:
