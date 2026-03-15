@@ -68,7 +68,9 @@ and HTCondor, Kubernetes or AWS Batch as alternatives to SLURM.
 When developing MMORPG alongside some different project
 then you essentially need an "editable" install of MMORPG,
 but this does not transpose to remote hosts.
-The solution is to symlink `src/mmorpg` into your project and make sure `rsync` is run with `-L` option.
+The solution is to symlink `ln -s path/to/src/mmorpg your_project/mmorpg`,
+and set `RSYNC_OPTS="-L"` in your environment to get it uploaded,
+and list it as an editable dependency, e.g. `uv add --editable ./mmorpg`.
 
 ### Testing
 

@@ -126,6 +126,9 @@ class Uplink:
         # Prepare: opts
         if isinstance(opts, str):
             opts = opts.split()
+        env_opts = os.environ.get("RSYNC_OPTS", "")
+        if env_opts:
+            opts = (*env_opts.split(), *opts)
 
         # Prepare: src, dst
         src = str(src)
@@ -152,7 +155,7 @@ class Uplink:
         multiplex = ("-e", self.ssh_M) if self.use_M else []
 
         # Assemble command
-        cmd = ["rsync", "-azhL", *progbar, *multiplex, *opts, src, dst]
+        cmd = ["rsync", "-azh", *progbar, *multiplex, *opts, src, dst]
 
         if self.dry:
             # Dry run
