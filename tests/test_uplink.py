@@ -130,7 +130,7 @@ def test_uplink_rsync_dry_run():
     # In dry mode, should return command string
     assert isinstance(cmd, str)
     assert "rsync" in cmd
-    assert "-azhL" in cmd
+    assert "-azh" in cmd
     assert "/local/src" in cmd
     assert "testhost:/remote/dst" in cmd
 
@@ -323,3 +323,31 @@ def test_uplink_sym_sync_downloads_on_exception(monkeypatch):
     # Should still download (reverse=True) even after exception
     downloads = [c for c in rsync_calls if c.get("reverse", False)]
     assert len(downloads) >= 1
+
+
+def test_uplink_rsync_with_env_opts(monkeypatch):
+    """Test rsync with RSYNC_OPTS environment variable"""
+    monkeypatch.setenv("RSYNC_OPTS", "-L --exclude=*.pyc")
+    ul = Uplink("testhost", dry=True)
+
+    cmd = ul.rsync("/src", "/dst")
+
+    # Check that env opts are included
+    assert "--exclude=*.pyc" in cmd
+    # -L will appear in the command (either as separate or combined with other flags)
+    cmd_list = cmd.split()
+    assert any("-L" in flag for flag in cmd_list)
+
+
+def test_uplink_rsync_env_opts_plus_param_opts(monkeypatch):
+    """Test that RSYNC_OPTS and parameter opts are combined"""
+    monkeypatch.setenv("RSYNC_OPTS", "-L")
+    ul = Uplink("testhost", dry=True)
+
+    cmd = ul.rsync("/src", "/dst", opts="--delete")
+
+    # Check both env and param opts are present
+    assert "--delete" in cmd
+    cmd_list = cmd.split()
+    assert any("-L" in flag for flag in cmd_list)
+
