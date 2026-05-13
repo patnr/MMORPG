@@ -7,7 +7,8 @@ runs independent simulation experiments in parallel and remotely
 (on a single host or a SLURM cluster), automating the work of push, pull, track, save
 and load for parameters and results, with minimal code (mental) overhead:
 ```py
-data_dir = dispatch(f, params, host)
+data_dir = dispatch(f, params, host) # instead of:
+# data = [f(**kw) for kw in params]
 ```
 
 MMORPG also helps in the post-processing, analysis and presentation
@@ -68,8 +69,9 @@ and HTCondor, Kubernetes or AWS Batch as alternatives to SLURM.
 When developing MMORPG alongside some different project
 then you essentially need an "editable" install of MMORPG,
 but this does not transpose to remote hosts.
-The solution is to symlink `src/mmorpg` into the same dir as your script,
-and set `RSYNC_OPTS="-L"` in your environment.
+The solution is to symlink `ln -s path/to/src/mmorpg your_project/mmorpg`,
+and set `RSYNC_OPTS="-L"` in your environment to get it uploaded,
+and list it as an editable dependency, e.g. `uv add --editable ./mmorpg`.
 
 ### Testing
 
