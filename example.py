@@ -5,7 +5,7 @@ from mmorpg import dict_prod, dispatch, load_data
 
 
 def experiment(seed=None, method=None, N=None):
-    """The main experiment of interest: Integrate f(x) = x^2 over [0, 1]."""
+    """The main (entry point) function of the experiment: Integrate f(x) = x^2 over [0, 1]."""
 
     def f(x):
         return x**2

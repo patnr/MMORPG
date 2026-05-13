@@ -7,7 +7,8 @@ runs independent simulation experiments in parallel and remotely
 (on a single host or a SLURM cluster), automating the work of push, pull, track, save
 and load for parameters and results, with minimal code (mental) overhead:
 ```py
-data_dir = dispatch(f, params, host)
+data_dir = dispatch(f, params, host) # instead of:
+# data = [f(**kw) for kw in params]
 ```
 
 MMORPG also helps in the post-processing, analysis and presentation
@@ -26,6 +27,9 @@ QoL details:
 - Progress bars everywhere
 - Error logging, not raising
 - `threadpoolctl.threadpool_limits(1)`
+- Nested multiprocessing in the case of SLURM jobs (speed up by reducing overhead)
+- TODO (clarify): serialization of (`f`) by reference uses less data storage, and...
+- TODO (clarify): Does not impose package structure on your script.
 
 ## Motivation
 
@@ -55,7 +59,7 @@ notably **Weights & Biases / MLflow / Neptune.ai / DAGsHub**.
 These tend to offer advanced experiment/parameter tracking and optimisation, and rich dashboards,
 but are less focused on the distributed computing itself,
 which is the purview of **Ray / Dask**, which scale from GPU to clusters.
-One ingredient not offered by MMORPG is pipeline workflow orchestration, as in Snakemake/Nextflow.
+One feature considered out-of-scope is pipeline workflow orchestration, as in **Snakemake / Nextflow**.
 
 ### Roadmap
 

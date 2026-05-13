@@ -10,7 +10,7 @@ Not "just" `xargs -P` since it also does
 
 # NOTE: "batch_runner.py" imports `script`.
 # We want it to support "standalone" scripts, i.e. run as `python path/to/{script}`
-# (instead of `python -m path/to{script}` which forces package structuring on {script}).
+# (instead of `python -m path/to/{script}` to avoid forcing pkg structure around {script}).
 # ⇒ must copy into `to/`, or insert `to/` in `sys.path`.
 # For remote work, we need to do the copy anyways, let's choose the copy solution.
 
