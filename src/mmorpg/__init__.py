@@ -17,6 +17,7 @@ timestamp = "%Y-%m-%d_at_%H-%M-%S"
 bar_frmt = "{l_bar}|{bar}| {n_fmt}/{total_fmt}, ⏱️ {elapsed} ⏳{remaining}, {rate_fmt}{postfix}"
 responsive = {"check": True, "capture_output": True, "text": True}
 
+DATA_ROOT: Path = Path.home() / "data"
 
 def dict_prod(**kwargs):
     """Product of `kwargs` values."""
@@ -54,17 +55,6 @@ def find_latest_run(root: Path):
     return f
 
 
-def git_dir():
-    """Get project (.git) root dir and HEAD 'sha'."""
-    git_dir = subprocess.run(["git", "rev-parse", "--show-toplevel"], **responsive).stdout.strip()
-    return Path(git_dir)
-
-
-def git_sha():
-    """Get project HEAD 'sha'."""
-    return subprocess.run(["git", "rev-parse", "--short", "HEAD"], **responsive).stdout.strip()
-
-
 def find_proj_dir(script: Path):
     """Find python project's root dir.
 
@@ -78,6 +68,40 @@ def find_proj_dir(script: Path):
             if candidate.exists():
                 return d
 
+def get_data_dir(script=None, fun=None, proj_dir=None, tags=None):
+    """
+    Generate (and maybe make) data_dir.
+
+    This is the working dir for current job, and synched to remote.
+    Populated by `inputs/`, `outputs/`, the `proj_dir`, and `slurm_job_array.sbatch`.
+    """
+    # Get path to `script`
+    if script is None:
+        assert fun is not None, "Either `script` or `fun` must be provided."
+        # Use `co_filename` because `fun.__module__` is sometimes "__main__" and sometimes relative
+        script = fun.__code__.co_filename
+    script = Path(script)
+
+    # Find proj_dir (code to upload)
+    if proj_dir is None:
+        proj_dir = find_proj_dir(script)
+    if len(proj_dir.relative_to(Path.home()).parts) <= 2:
+        msg = f"The `proj_dir` ({proj_dir}) should be uploaded, but is too close to home dir."
+        raise RuntimeError(msg)
+
+    data_dir = DATA_ROOT / proj_dir.stem / script.stem  # ⇒ ~/data/proj/script [usually]
+
+    if tags == "latest":
+        data_dir /= find_latest_run(data_dir)
+    elif tags:
+        data_dir /= tags
+    else:
+        data_dir /= datetime.now().strftime(timestamp)
+
+    # Make relative
+    script = proj_dir.stem / script.relative_to(proj_dir)
+
+    return data_dir, script, proj_dir
 
 def save(inputs, data_dir, nBatch):
     print(f"Saving {len(inputs)} inputs to", data_dir)
@@ -233,7 +257,6 @@ def dispatch(
     nBatch: int = None,
     proj_dir: Path = None,
     tags: list | str = None,
-    data_root: Path = Path.home() / "data",
     data_root_on_remote: Path = None,
     slurm_kws: dict = None,
     setup: list[str] | str = "uv",
@@ -297,9 +320,6 @@ def dispatch(
     tags: list, optional
         By default the data gets stamped with the current datetime.
         You can chose to replace this with your custom tags, for example: ["v1"].
-    data_root : Path, optional
-        Local root for experiment data. Default: `~/data`
-        Gets populated by `inputs/`, `outputs/`, the `proj_dir`, and `slurm_job_array.sbatch`.
     data_root_on_remote : Path, optional
         Remote root for data. Auto-set: `${USERWORK}` (NORCE HPC) or `${HOME}/data` (other).
     setup : list[str], optional
@@ -332,31 +352,11 @@ def dispatch(
     if not inputs:
         raise ValueError("inputs list cannot be empty")
 
-    # Get path to `script`
-    if script is None:
-        # Use `co_filename` because `fun.__module__` is sometimes "__main__" and sometimes relative
-        script = fun.__code__.co_filename
-    script = Path(script)
-
-    # Find proj_dir (code to upload)
-    if proj_dir is None:
-        proj_dir = find_proj_dir(script)
-    if len(proj_dir.relative_to(Path.home()).parts) <= 2:
-        msg = f"The `proj_dir` ({proj_dir}) should be uploaded, but is too close to home dir."
-        raise RuntimeError(msg)
-
-    # Save to data_dir (root archive & working dir for current job)
-    data_dir = data_root / proj_dir.stem / script.stem  # ⇒ ~/data/proj/script [usually]
-    if tags:
-        data_dir /= tags
-    else:
-        data_dir /= datetime.now().strftime(timestamp)
+    # Make data_dir (working dir for current job)
+    data_dir, script, proj_dir = get_data_dir(script, fun, proj_dir, tags)
     data_dir.mkdir(parents=True)
     (data_dir / "inputs").mkdir()
     (data_dir / "outputs").mkdir()
-
-    # Make relative
-    script = proj_dir.stem / script.relative_to(proj_dir)
 
     # Copy resources to data_dir
     ignores = shutil.ignore_patterns("*.pyc", "__pycache__")
@@ -404,7 +404,7 @@ def dispatch(
                 "${USERWORK}" if "hpc.intra.norceresearch" in host else "${HOME}/data"
             )
         data_root_on_remote = remote.shell_expand(data_root_on_remote)
-        remote_dir = Path(data_root_on_remote) / data_dir.relative_to(data_root)
+        remote_dir = Path(data_root_on_remote) / data_dir.relative_to(DATA_ROOT)
 
         with remote.sym_sync(data_dir, remote_dir):  # up- & download
             py = install_deps(remote, remote_dir / proj_dir.stem, setup, venv)
