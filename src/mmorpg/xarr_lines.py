@@ -80,68 +80,6 @@ class ScalarFormatter10(ScalarFormatter):
             return f"{x:.0f}"
 
 
-# Modified from mpl dhaitz/mplcyberpunk to add kwargs
-def make_lines_glow(
-    ax: Optional[plt.Axes] = None,
-    n_glow_lines: int = 10,
-    diff_linewidth: float = 1.05,
-    alpha_line: float = 0.3,
-    lines: Union[plt.Line2D, List[plt.Line2D]] = None,
-    **kwargs,
-) -> None:
-    """Add a glow effect to the lines in an axis object.
-
-    Each existing line is redrawn several times with increasing width and low alpha to create the glow effect.
-    """
-    if not ax:
-        ax = plt.gca()
-
-    lines = ax.get_lines() if lines is None else lines
-    lines = [lines] if isinstance(lines, plt.Line2D) else lines
-
-    alpha_value = alpha_line / n_glow_lines
-
-    for line in lines:
-        data = line.get_data(orig=False)
-        linewidth = line.get_linewidth()
-
-        try:
-            step_type = line.get_drawstyle().split("-")[1]
-        except:
-            step_type = None
-
-        for n in range(1, n_glow_lines + 1):
-            if step_type:
-                (glow_line,) = ax.step(*data)
-            else:
-                (glow_line,) = ax.plot(*data)
-            glow_line.update_from(
-                line
-            )  # line properties are copied as seen in this solution: https://stackoverflow.com/a/54688412/3240855
-
-            if kwargs is not None:
-                glow_line.set(**kwargs)
-
-            glow_line.set_alpha(alpha_value)
-            glow_line.set_linewidth(linewidth + (diff_linewidth * n))
-            glow_line.is_glow_line = (
-                True  # mark the glow lines, to disregard them in the underglow function.
-            )
-
-
-def set_visibility(lines, visibility=None, alpha=None):
-    for line in lines:
-        if line:
-            if alpha is not None:
-                line.set_alpha(alpha)
-                if sc := getattr(line, "scatter", None):
-                    sc.set_alpha(alpha)
-            if visibility is not None:
-                line.set_visible(visibility)
-                if sc := getattr(line, "scatter", None):
-                    sc.set_visible(visibility)
-
-
 def sparse_to_series(a):
     """Convert *sparse* `DataArray` to a `pd.Series`."""
     # Enables round-tripping with xr.DataArray.from_series(., sparse=True).
@@ -357,6 +295,204 @@ def add_lines(ax, xarr, xdim, ls, vLS, line_registry, kws, mark_stop=False):
         line_registry.setdefault(labls[i], []).append(line)
 
 
+def _legend_parts(handles):
+    """Derive `(title, labels, line0s)` for `handles`'s legend from its (deduped) index.
+
+    Recomputed fresh from `handles` every time (rather than cached), so this stays correct
+    even after `handles` is mutated in place (e.g. by `groupby(...).sum()`), and works
+    uniformly regardless of how many entries `handles` has -- including 0 or 1.
+    """
+    if len(handles) == 0:
+        return "", [], []
+    title, *labels = handles.index.to_frame(index=False).to_string(index=False).splitlines()
+    line0s = [lines[0] for lines in handles.values]
+    return title, labels, line0s
+
+
+class PartialShow:
+    """Simple setting of visibility/glow for many lines, figs, and deduplicated legend.
+
+    `handles`, `fig_registry`: as returned by `line_plots()`. The legend figure/axes is
+    assumed to be the last entry of `fig_registry` (as arranged by `line_plots`).
+
+    Usage: `only_show = PartialShow(handles, fig_registry).only_these`
+    """
+
+    @staticmethod
+    # Modified from mpl dhaitz/mplcyberpunk to add kwargs
+    def make_lines_glow(
+        ax: Optional[plt.Axes] = None,
+        n_glow_lines: int = 10,
+        diff_linewidth: float = 1.05,
+        alpha_line: float = 0.3,
+        lines: Union[plt.Line2D, List[plt.Line2D]] = None,
+        **kwargs,
+    ) -> None:
+        """Add a glow effect to the lines in an axis object.
+
+        Each existing line is redrawn several times with increasing width and low alpha to create the glow effect.
+        """
+        if not ax:
+            ax = plt.gca()
+
+        lines = ax.get_lines() if lines is None else lines
+        lines = [lines] if isinstance(lines, plt.Line2D) else lines
+
+        alpha_value = alpha_line / n_glow_lines
+
+        for line in lines:
+            data = line.get_data(orig=False)
+            linewidth = line.get_linewidth()
+
+            try:
+                step_type = line.get_drawstyle().split("-")[1]
+            except:
+                step_type = None
+
+            for n in range(1, n_glow_lines + 1):
+                if step_type:
+                    (glow_line,) = ax.step(*data)
+                else:
+                    (glow_line,) = ax.plot(*data)
+                glow_line.update_from(
+                    line
+                )  # line properties are copied as seen in this solution: https://stackoverflow.com/a/54688412/3240855
+
+                if kwargs is not None:
+                    glow_line.set(**kwargs)
+
+                glow_line.set_alpha(alpha_value)
+                glow_line.set_linewidth(linewidth + (diff_linewidth * n))
+                glow_line.is_glow_line = (
+                    True  # mark the glow lines, to disregard them in the underglow function.
+                )
+
+    @staticmethod
+    def set_visibility(lines, visibility=None, alpha=None):
+        for line in lines:
+            if line:
+                if alpha is not None:
+                    line.set_alpha(alpha)
+                    if sc := getattr(line, "scatter", None):
+                        sc.set_alpha(alpha)
+                if visibility is not None:
+                    line.set_visible(visibility)
+                    if sc := getattr(line, "scatter", None):
+                        sc.set_visible(visibility)
+
+    def __init__(self, handles, fig_registry, alpha=None):
+        """
+        Parameters
+        ----------
+        handles, fig_registry
+            As returned by `line_plots()`.
+        alpha : float or (float, float), optional
+            Line transparency: `a` for entries in `iShow`, else `b` (default 0), where
+            `a, b = alpha` if `alpha` is a pair, else `a = alpha`. By default (`None`),
+            use visibility (on/off), instead of transparency, to distinguish `iShow`.
+        """
+        self.handles = handles
+        self.fig_registry = fig_registry
+        self.alpha = alpha
+        self.current_glow = []
+
+    def only_these(self, iShow, iGlow):
+        """Show/hide/glow legend entries `iShow`/`iGlow` (both index `handles`, or `True` for all).
+
+        Parameters
+        ----------
+        iShow : list or True
+            Indices (into `handles`) of the entries to show. If `self.alpha` is set, all
+            entries are shown, with `alpha` distinguishing between "in `iShow`" or not
+            (rather than the "shown"/hidden line visibility that's used if `alpha=None`).
+        iGlow : list or True
+            Indices (into `handles`) of the entries to add a glow effect to.
+        """
+        handles = self.handles
+        fig_registry = self.fig_registry
+        current_glow = self.current_glow
+        alpha = self.alpha
+
+        ax0 = fig_registry[-1].axes[0]
+        ALL = list(range(len(handles)))
+        if iShow is True:
+            iShow = ALL
+        if iGlow is True:
+            iGlow = ALL
+
+        alert = "#EB811B"  # Beamer Moloch theme alert text color
+
+        # ╔═══════════╗
+        # ║ main axes ║
+        # ╚═══════════╝
+        # Rm previous glow
+        while current_glow:
+            current_glow.pop(0).remove()
+
+        # Disable autoscale for glow (edges for axes can be very sensitive)
+        for fig in fig_registry:
+            for ax in fig.axes:
+                ax.set_autoscale_on(False)  # Disable autoscaling
+
+        for i, (_idx, lines) in enumerate(handles.items()):
+            # Visibility
+            if alpha is None:
+                # Using `visible`
+                self.set_visibility(lines, i in iShow)
+            else:
+                # Using `alpha`
+                try:
+                    a, b = alpha
+                except TypeError:
+                    a = alpha
+                    b = 0
+                self.set_visibility(lines, alpha=a if i in iShow else b)
+
+            # Glow
+            if i in iGlow:
+                for line in lines:
+                    old_lines = line.axes.get_lines()
+                    self.make_lines_glow(
+                        line.axes,
+                        n_glow_lines=10,
+                        diff_linewidth=0.5 + 0.4 / len(lines),
+                        alpha_line=0.5 + 0.3 / len(lines),
+                        lines=line,
+                        color=alert,
+                        zorder=1,
+                        linestyle="-",
+                    )
+                    # Find glow lines by difference before and after adding glow
+                    new_lines = line.axes.get_lines()
+                    line.glow_lines = [ln for ln in new_lines if ln not in old_lines]
+                    current_glow.extend(line.glow_lines)
+
+        # ╔════════╗
+        # ║ legend ║
+        # ╚════════╝
+        # NB: simply appending legend lines `handles` enables toggle_visibility(). But
+        #   * requires using plt.pause(0.1) beforehand
+        #   * the text (label) is not toggled
+        #   * savefig() misplaces glow (for all data transformation I tried).
+        # So instead, we redraw the legend entirely
+        title, labels, line0s = _legend_parts(handles)
+        lines = line0s[:]
+        for i in iGlow:
+            # glow = plt.Line2D([], [], linestyle="-", color=alert, linewidth=6, alpha=0.7)
+            # lines[i] = (glow, lines[i])
+            lines[i] = (*lines[i].glow_lines, lines[i])
+        # Sub-select
+        labls = labels[:]
+        if alpha is None:
+            lines = [lines[i] for i in iShow]
+            labls = [labls[i] for i in iShow]
+        # Draw
+        if not lines:
+            ax0.legend([], [])
+        else:
+            ax0.legend(lines, labls, title=title, **legend_mono)
+
+
 def line_plots(
     skill: xr.DataArray,
     orient: Struct,
@@ -523,137 +659,51 @@ def line_plots(
     fig, ax0 = plt.subplots(num="legend")
     ax0.axis("off")
 
-    if len(handles) <= 1:
-        legend = ax0.legend([], [], title="", **legend_mono)
-    else:
-        # Easier to work with df than MultiIndex
-        labels = handles.index.to_frame(index=False)
+    # Easier to work with df than MultiIndex
+    labels = handles.index.to_frame(index=False)
 
-        # Drop unnecessary cols
-        not_all_same = labels.nunique().gt(1)
-        # Add to meta
-        for col in labels.columns:
-            if not not_all_same[col]:
-                meta[col] = str(labels[col].iloc[0])
-        labels = labels.loc[:, not_all_same]
-        # labels = labels.drop(columns="singleton_hue", errors="ignore")  # rm dummy
+    # Drop unnecessary cols -- unless that would drop *all* of them (e.g. len(handles) <= 1,
+    # where every col is trivially "all same"), in which case keep them all so there's still
+    # something to show in the legend, and `pd.MultiIndex.from_frame` below doesn't choke on
+    # a 0-column frame.
+    not_all_same = labels.nunique().gt(1)
+    if not not_all_same.any():
+        not_all_same[:] = True
+    # Add to meta
+    for col in labels.columns:
+        if not not_all_same[col]:
+            meta[col] = str(labels[col].iloc[0])
+    labels = labels.loc[:, not_all_same]
+    # labels = labels.drop(columns="singleton_hue", errors="ignore")  # rm dummy
 
-        # Each ls only gets labelled once
-        if ls_once and orient.linestyle:
-            vLS0 = projection(skill, orient.linestyle)[0]
-            if vLS0 is not None:
-                # Set non-ls coords to "*" (thus creating duplicate labels) if vLS != vLS[0]
-                once = (labels[list(vLS)] != vLS0).all(axis=1)
-                labels.loc[once, labels.columns.difference(vLS)] = "*"
+    # Each ls only gets labelled once
+    if ls_once and orient.linestyle:
+        vLS0 = projection(skill, orient.linestyle)[0]
+        if vLS0 is not None:
+            # Set non-ls coords to "*" (thus creating duplicate labels) if vLS != vLS[0]
+            once = (labels[list(vLS)] != vLS0).all(axis=1)
+            labels.loc[once, labels.columns.difference(vLS)] = "*"
 
-        # Drop categorical columns (starting with `fix_`)
-        labels = labels.loc[:, ~labels.columns.str.startswith("fix_")]
-        # OR: prettify
-        # labels.columns = [ f"({lbl[4:]})" if lbl.startswith("fix_") else lbl for lbl in labels.columns ]
-        # labels = labels.replace("_VAR_", "")
+    # Drop categorical columns (starting with `fix_`)
+    labels = labels.loc[:, ~labels.columns.str.startswith("fix_")]
+    # OR: prettify
+    # labels.columns = [ f"({lbl[4:]})" if lbl.startswith("fix_") else lbl for lbl in labels.columns ]
+    # labels = labels.replace("_VAR_", "")
 
-        # Alias
-        labels = labels.replace(NONE, "N/A")
-        labels = labels.rename(columns=dim_aliases)
-        for dim in aliases:
-            if dim in labels.columns:
-                labels[dim] = labels[dim].replace(aliases[dim])
+    # Alias
+    labels = labels.replace(NONE, "N/A")
+    labels = labels.rename(columns=dim_aliases)
+    for dim in aliases:
+        if dim in labels.columns:
+            labels[dim] = labels[dim].replace(aliases[dim])
 
-        # Merge equal rows
-        handles.index = pd.MultiIndex.from_frame(labels)
-        handles = handles.groupby(level=list(range(handles.index.nlevels))[::-1]).sum()
+    # Merge equal rows
+    handles.index = pd.MultiIndex.from_frame(labels)
+    handles = handles.groupby(level=list(range(handles.index.nlevels))[::-1]).sum()
 
-        # Finalize legend
-        title, *labels = handles.index.to_frame(index=False).to_string(index=False).splitlines()
-        line0s = [lines[0] for lines in handles.values]
-
-        # Draw legend
-        legend = ax0.legend(line0s, labels, title=title, **legend_mono)
-
-    current_glow = []
-
-    def partial_show(iShow, iGlow, alpha=None):
-        ALL = list(range(len(handles)))
-        if iShow is True:
-            iShow = ALL
-        if iGlow is True:
-            iGlow = ALL
-
-        alert = "#EB811B"  # Beamer Moloch theme alert text color
-
-        # ╔═══════════╗
-        # ║ main plot ║
-        # ╚═══════════╝
-        # Rm previous glow
-        while current_glow:
-            current_glow.pop(0).remove()
-
-        # Disable autoscale for glow (edges for axes can be very sensitive)
-        for fig in fig_registry:
-            for ax in fig.axes:
-                ax.set_autoscale_on(False)  # Disable autoscaling
-
-        for i, (_idx, lines) in enumerate(handles.items()):
-            # Visibility
-            if alpha is None:
-                # Using `visible`
-                set_visibility(lines, i in iShow)
-            else:
-                # Using `alpha`
-                try:
-                    a, b = alpha
-                except TypeError:
-                    a = alpha
-                    b = 0
-                set_visibility(lines, alpha=a if i in iShow else b)
-
-            # Glow
-            if i in iGlow:
-                for line in lines:
-                    old_lines = line.axes.get_lines()
-                    make_lines_glow(
-                        line.axes,
-                        n_glow_lines=10,
-                        diff_linewidth=0.5 + 0.4 / len(lines),
-                        alpha_line=0.5 + 0.3 / len(lines),
-                        lines=line,
-                        color=alert,
-                        zorder=1,
-                        linestyle="-",
-                    )
-                    # Find glow lines by difference before and after adding glow
-                    new_lines = line.axes.get_lines()
-                    line.glow_lines = [ln for ln in new_lines if ln not in old_lines]
-                    current_glow.extend(line.glow_lines)
-
-        # ╔════════╗
-        # ║ legend ║
-        # ╚════════╝
-        # The following appends legend lines to regular/main plot lines
-        # >>> for i, line in enumerate(legend.get_lines()):
-        # >>>     handles.iloc[i].append(line)
-        # Thus, lagend handles would also get treated by toggle_visibility(). But
-        #   * requires using plt.pause(0.1) beforehand
-        #   * the text (label) is not toggled
-        #   * savefig() misplaces glow (for all data transformation I tried).
-        # ⇒ Redraw the legend, using tuple handles
-        lines = line0s[:]
-        for i in iGlow:
-            # glow = plt.Line2D([], [], linestyle="-", color=alert, linewidth=6, alpha=0.7)
-            # lines[i] = (glow, lines[i])
-            lines[i] = (*lines[i].glow_lines, lines[i])
-        # Sub-select
-        labls = labels[:]
-        if alpha is None:
-            lines = [lines[i] for i in iShow]
-            labls = [labls[i] for i in iShow]
-        # Draw
-        if not lines:
-            ax0.legend([], [])
-        else:
-            ax0.legend(lines, labls, title=title, **legend_mono)
-
-    handles.show_partial = partial_show
+    # Draw legend
+    title, labels, line0s = _legend_parts(handles)
+    legend = ax0.legend(line0s, labels, title=title, **legend_mono)
 
     # Add meta for *all* data
     already_labelled = ["fig", "panel_row", "panel_col", "xaxis", "linestyle"]
