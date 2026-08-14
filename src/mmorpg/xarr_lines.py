@@ -19,7 +19,6 @@ NOTE: on pandas vs xarray:
 
 import itertools
 import warnings
-from typing import List, Optional, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -164,7 +163,6 @@ def find_categorical(ds, dim):
     """Find categorical (or nan) values (of `dim`). Add corresponding dimension (index level)."""
     ticks = ds.index.get_level_values(dim)
     numeric = pd.to_numeric(ticks, errors="coerce").notna()
-    ticks = ticks[numeric].drop_duplicates().astype(float)
     if any(~numeric):
         cat = "fix_" + dim
         # Split into numeric and non-numeric, rename non-numeric dim
@@ -229,6 +227,12 @@ def validate(orient, data_dims):
 
 
 def sharey_recommended(skill_space):
+    """Recommend a `sharey` value for `line_plots`, given the (caller-defined) `skill_space`.
+
+    `skill_space` lists the `orient` roles (e.g. `["fig", "panel_row"]`) whose subspaces the
+    caller has independently rescaled (e.g. via a 0-to-1 normalization) before plotting --
+    typically paired with `scale01()`/`normalize_spaces()`-like preprocessing done by the caller.
+    """
     if "panel_row" in skill_space and "panel_col" in skill_space:
         sharey = "all"
     elif "panel_row" in skill_space:
@@ -321,11 +325,11 @@ class PartialShow:
     @staticmethod
     # Modified from mpl dhaitz/mplcyberpunk to add kwargs
     def make_lines_glow(
-        ax: Optional[plt.Axes] = None,
+        ax: plt.Axes | None = None,
         n_glow_lines: int = 10,
         diff_linewidth: float = 1.05,
         alpha_line: float = 0.3,
-        lines: Union[plt.Line2D, List[plt.Line2D]] = None,
+        lines: plt.Line2D | list[plt.Line2D] | None = None,
         **kwargs,
     ) -> None:
         """Add a glow effect to the lines in an axis object.
@@ -346,7 +350,7 @@ class PartialShow:
 
             try:
                 step_type = line.get_drawstyle().split("-")[1]
-            except:
+            except IndexError:
                 step_type = None
 
             for n in range(1, n_glow_lines + 1):
@@ -363,9 +367,8 @@ class PartialShow:
 
                 glow_line.set_alpha(alpha_value)
                 glow_line.set_linewidth(linewidth + (diff_linewidth * n))
-                glow_line.is_glow_line = (
-                    True  # mark the glow lines, to disregard them in the underglow function.
-                )
+                # Mark the glow lines, to disregard them in the underglow function.
+                glow_line.is_glow_line = True  # ty: ignore[unresolved-attribute]
 
     @staticmethod
     def set_visibility(lines, visibility=None, alpha=None):
@@ -500,7 +503,7 @@ def line_plots(
     dim_aliases={},
     aliases={},
     fig_title="",
-    sharey="auto",
+    sharey=False,
     sharex="col",
     xscale="linear",
     axes_labelcolor=None,
@@ -526,7 +529,9 @@ def line_plots(
     fig_title : str, optional
         Figure title (prefix), by default "".
     sharey : str, optional
-        "all" | False | "row" | "col" | "auto", by default "auto".
+        "all" | False | "row" | "col", by default False.
+        Use `sharey_recommended(skill_space)` to compute a recommended value based on which
+        `orient` roles you've independently rescaled (e.g. via `scale01`) before plotting.
     sharex : str, optional
         "all" | False | "row" | "col", by default "col".
     axes_labelcolor : str, optional
@@ -609,7 +614,7 @@ def line_plots(
                     ax.set_xscale(xscale)
 
                 # ylabel
-                if "(%)" in skill.name:
+                if isinstance(skill.name, str) and "(%)" in skill.name:
                     ax.set_yticks([0, 25, 50, 75, 100])
                     ax.set_yticklabels([None, 25, 50, 75, 100])
 
@@ -630,7 +635,7 @@ def line_plots(
                     set_panel_row_label(ax, uPanel, nickname, gs.is_first_row())
 
         with plt.rc_context({"text.color": axes_labelcolor}):
-            fig.supylabel(skill.name, x=0.03, y=0.55)
+            fig.supylabel(str(skill.name), x=0.03, y=0.55)
             fig.supxlabel(nickname(orient.xaxis), y=0.04)
         fig.tight_layout(h_pad=0.1, w_pad=0.1, pad=1.3 if axs.size > 1 else 3.0)
 
@@ -646,7 +651,7 @@ def line_plots(
     color_df = handles.unstack(orient.linestyle)
     if isinstance(color_df, pd.Series):
         color_df = color_df.to_frame()
-    for i, (label, lines) in enumerate(color_df.iterrows()):
+    for i, (_label, lines) in enumerate(color_df.iterrows()):
         for line in np.ravel(list(lines)):
             # Must be listed colormap
             colr = plt.colormaps[cmap](i % plt.colormaps[cmap].N)

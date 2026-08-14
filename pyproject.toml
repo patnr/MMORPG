@@ -33,6 +33,7 @@ dev = [
     "ipdb>=0.13.13",
     "pytest>=9.0.2",
     "ruff>=0.8.0",
+    "ty>=0.0.39",
 ]
 
 [tool.ruff]
@@ -54,6 +55,7 @@ select = [
 ]
 ignore = [
     "E501",   # line too long (handled by formatter)
+    "C408",   # dict() vs {}
 ]
 
 [tool.ruff.lint.isort]
