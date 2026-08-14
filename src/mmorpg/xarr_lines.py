@@ -667,7 +667,7 @@ def line_plots(
                 if gs.is_last_col():
                     set_panel_row_label(ax, uPanel, nickname, gs.is_first_row())
 
-        with plt.rc_context({"text.color": axes_labelcolor}):
+        with plt.rc_context({} if axes_labelcolor is None else {"text.color": axes_labelcolor}):
             fig.supylabel(str(skill.name), x=0.03, y=0.55)
             fig.supxlabel(nickname(orient.xaxis), y=0.04)
         fig.tight_layout(h_pad=0.1, w_pad=0.1, pad=1.3 if axs.size > 1 else 3.0)
