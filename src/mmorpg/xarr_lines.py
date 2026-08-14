@@ -5,6 +5,15 @@ Rationale
 >1 dim to "hue"; cannot re-use figs if supplying kwargs `row` and `col`)
 and requires some workarounds that make it easier to just do the processing ourselves.
 
+Meanwhile it's tempting to just call `plt.plot(..., shape_tables())`.
+since `shape_tables()` uses a few pandas API calls,
+which is seemingly reinvented by the more elaborate `line_plots()` (relying on xarray).
+But `line_plots()` nests `.sel()` calls (one per fig/panel/linestyle/unlabelled leaf) and only
+unstacks (i.e. *densifies*) `xdim` *within* each already-narrowed leaf.
+Meanwhile `shape_tables()` instead unstacks the *entire* `skill` in one shot (less overhead).
+But for a ragged grid of experiments (e.g. different `fig`/`panel_row`/... groups cover different `xaxis` ticks)
+the single/global unstack pads *every* group with NaNs for ticks only *some* other group has.
+
 NOTE: on pandas vs xarray:
 ----
 - Cleaning and tabulating data is easier with pandas,
@@ -14,7 +23,6 @@ NOTE: on pandas vs xarray:
     - `skill.groupby(skill.index.names.difference(orient.mean), sort=False).mean()`.
 - Similarly, arithmetics w/ broadcasting, as in `scale01`, would be
   much harder with pandas (with multiindex).
-
 """
 
 import itertools
@@ -758,6 +766,58 @@ def line_plots(
     fig_registry.append(fig)
 
     return fig_registry, handles
+
+
+def shape_tables(skill, orient, dim_aliases={}, col_dims=None, find_cat=False):
+    """Print `skill` as a single table, instead of plotting it via `line_plots()`.
+
+    `orient.xaxis` and `col_dims` are unstacked into a (`MultiIndex`'d, if
+    `col_dims` is non-empty) column index. The row `MultiIndex` is reordered so
+    `orient.fig` is the outermost level(s), followed by `orient.panel_row`, then
+    everything else (`linestyle`, `unlabelled`, plus whatever's left over for
+    "hue") -- mirroring `line_plots()`'s figure-then-row nesting.
+
+    Parameters
+    ----------
+    skill : xr.DataArray
+        Must use sparse underlying data.
+    orient : Struct
+        As passed to `line_plots()`.
+    dim_aliases : dict, optional
+        Nick names for dims, used in the row/column index names.
+    col_dims : list, optional
+        Extra dims (besides `orient.xaxis`) to unstack into (outer levels of) the
+        column `MultiIndex`. By default (`None`), uses `orient.panel_col` --
+        mirroring `line_plots()`'s use of `panel_col` for (visually) side-by-side
+        panels. Pass `[]` for single-level (`xaxis`-only) columns.
+    find_cat : bool, optional
+        Whether to split off non-numeric `xaxis` ticks into a separate ("fix_")
+        index level (see `find_categorical()`), by default `False` -- that
+        splitting is aimed at plotting (flat/constant lines), and usually isn't
+        wanted in a table.
+
+    Returns
+    -------
+    pd.DataFrame
+        Row `MultiIndex`: `orient.fig`, then `orient.panel_row`, then the rest.
+        Column index: `col_dims`, then `orient.xaxis`.
+    """
+    if col_dims is None:
+        col_dims = orient.panel_col
+
+    row_dims = [*orient.fig, *orient.panel_row]
+
+    ds = sparse_to_series(skill)
+    if find_cat:
+        ds = find_categorical(ds, orient.xaxis)
+    df = ds.unstack([*col_dims, orient.xaxis])  # NB: causes NaNs if xaxis/col_dims coords differ
+
+    etc_dims = [d for d in df.index.names if d not in row_dims]
+    df = df.reorder_levels([*row_dims, *etc_dims], axis=0)
+    df = df.sort_index(axis=0).sort_index(axis=1)
+    df = df.rename_axis(index=dim_aliases, columns=dim_aliases)
+
+    return df
 
 
 def save_all(
