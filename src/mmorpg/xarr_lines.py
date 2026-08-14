@@ -248,6 +248,24 @@ def sharey_recommended(skill_space):
     return sharey
 
 
+def scale01(x: xr.DataArray, groupby: list, xaxis: str, min_like="min"):
+    """Normalize `x`.
+
+    Performs linear (affine) transformations within each cross-section (subspace)
+    indexed by `groupby` so that it has range 0 --> 1
+    (other ranges result if using `min_like="mean"` or `"median"`).
+    """
+    dims = set(x.dims) - set(groupby)
+    a = x.max(dims)
+    __min = getattr(xr.DataArray, min_like)  # e.g. min(), mean(), or median()
+    # b = __min(x.sel({xaxis: 0}, drop=True), dims - {xaxis})
+    b = x.min(dims)
+    skill = (x - b) / (a - b)
+    if (a == b).all():
+        print("Warning: all values are equal. Normalization will result in NaNs.")
+    return skill
+
+
 def add_lines(ax, xarr, xdim, ls, vLS, line_registry, kws, mark_stop=False):
     """Plot lines (including those flat/constant) onto `ax`."""
 
