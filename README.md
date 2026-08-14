@@ -76,6 +76,10 @@ The solution is to symlink `ln -s path/to/src/mmorpg your_project/mmorpg`,
 and set `RSYNC_OPTS="-L"` in your environment to get it uploaded,
 and list it as an editable dependency, e.g. `uv add --editable ./mmorpg`.
 
+Code changes to MMORPG are picked up automatically (it's an editable install), but
+whenever its `pyproject.toml` changes (e.g. a new/updated dependency),
+you need to re-run `uv sync` (or `uv lock && uv sync`) *in each consuming project*.
+
 ### Testing
 
 ```bash
