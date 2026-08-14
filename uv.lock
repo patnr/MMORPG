@@ -441,7 +441,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.3.3" },
     { name = "pathos", specifier = ">=0.3.4" },
     { name = "pyyaml", specifier = ">=6.0.2" },
-    { name = "sparse", git = "https://github.com/patnr/sparse.git?branch=fix-reduce-nan-fill-value" },
+    { name = "sparse", specifier = ">=0.19.2" },
     { name = "threadpoolctl", specifier = ">=3.6.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "xarray", specifier = ">=2025.12.0" },
@@ -928,11 +928,15 @@ wheels = [
 
 [[package]]
 name = "sparse"
-version = "0.19.1.dev6+ge3bb99050"
-source = { git = "https://github.com/patnr/sparse.git?branch=fix-reduce-nan-fill-value#e3bb990508a3f131ba74a6de42ae70be08c9adfd" }
+version = "0.19.2"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "numba" },
     { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/86/9f/2cd5f071ce00083f74af90ae2c083393ef3e91ecd78f0f24887871473dd4/sparse-0.19.2.tar.gz", hash = "sha256:0d41a7c3f477cb4265d7193bcf12b0146674d6533ff328afa1e1d0f2b8480f00", size = 814045, upload-time = "2026-08-14T09:37:27.288Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/09/4e/23e0009b6d5d415c223ea38fcf1e38dc9b0fc6d3ff15b5c5090dcc1f6d88/sparse-0.19.2-py2.py3-none-any.whl", hash = "sha256:2fcad7b83dacb5c70123a7de76db3626cbdaf567fcf12bdbf637aca6c4ee1bbe", size = 155257, upload-time = "2026-08-14T09:37:25.64Z" },
 ]
 
 [[package]]
