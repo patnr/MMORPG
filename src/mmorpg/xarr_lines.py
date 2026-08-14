@@ -19,6 +19,7 @@ NOTE: on pandas vs xarray:
 
 import itertools
 import warnings
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -29,6 +30,9 @@ from matplotlib.text import OffsetFrom
 from matplotlib.ticker import ScalarFormatter, SymmetricalLogLocator
 from matplotlib.transforms import Bbox
 from pandas import pandas as pd
+
+from .tools import confirm_cold_call
+from .tools import yank as yanker
 
 # None-like value that pandas does not convert to NaN. Will show as blank in legend.
 # PS: Cannot use actual `None` because gets re-converted to NaN unless `dtype` is object,
@@ -736,3 +740,79 @@ def line_plots(
     fig_registry.append(fig)
 
     return fig_registry, handles
+
+
+def save_all(
+    figures,
+    img_dir,
+    data_dir,
+    meta,
+    orient,
+    handles,
+    tags=tuple(),
+    ext="pdf",
+    yank=False,
+    script=None,
+    seconds=300,
+):
+    """Save `figures` (as returned by `line_plots()`) to `img_dir`.
+
+    Parameters
+    ----------
+    figures : list of Figure
+        `fig_registry`, as returned by `line_plots()`.
+    img_dir : Path
+        Directory to save into.
+    data_dir : Path
+        Its `.name` (e.g. a timestamp) is included in the generated filename.
+    meta, orient : dict, Struct
+        Included (stringified) in the generated filename as data-processing info.
+    handles
+        As returned by `line_plots()`; `handles.total_bbox` is used as the legend's bbox.
+    tags : tuple, optional
+        Custom tags (e.g. "backup", "dirty") appended to the filename, by default ().
+    ext : str, optional
+        File extension/format passed to `fig.savefig`, by default "pdf".
+    yank : bool or "first", optional
+        Copy the filename(s) to the clipboard, by default False.
+    script : str, optional
+        Passed to `confirm_cold_call` (typically the caller's `__file__`).
+        Prevents a "cold" re-run (e.g. re-opening the script after a long time)
+        from overwriting existing figures unless user confirms, while rapid
+        successive calls (e.g. iterating on plot styling) don't nag on every save.
+        By default `None`, which skips `confirm_cold_call` and always saves.
+    seconds : int, optional
+        Passed to `confirm_cold_call`, by default 300.
+    """
+    for i, fig in enumerate(figures):
+        parts = [
+            data_dir.name,  # timestamp (≈implies git dir and sha)
+            str({**meta, **orient})[1:-1],  # data processing info
+            fig.get_label().split(" -- ")[-1],  # fig title/label
+            *tags,  # "backup", "dirty", ...,  # custom tags
+        ]
+        # Sanitize for file-naming.
+        # Use sub-dirs to limit filename length (constrained on many systems)
+        parts = [
+            part.replace(": ", "=").replace("'", "").replace(",", "").replace("/", "-")
+            for part in parts
+        ]
+        rel_path = Path(*parts[:-1], f"{parts[-1]}.{ext}")
+        name = str(rel_path)
+
+        # Facilitate importing into slides.tex
+        if yank and (yank is True or i == 0):
+            print("* " + name)
+            yanker(name, append=i)  # copy to clipboard
+
+        bbox = "tight"
+        # Keep legend box size constant accross overlays
+        if "legend" == fig.get_label():
+            bbox = handles.total_bbox.transformed(fig.dpi_scale_trans.inverted())
+
+        out_path = img_dir / rel_path
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        @confirm_cold_call(script, seconds)
+        def save_figure():
+            fig.savefig(out_path, bbox_inches=bbox, pad_inches=0.05)

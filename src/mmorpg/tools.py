@@ -18,12 +18,16 @@ warn = "Warning:"
 ip = __import__("IPython").get_ipython() if "IPython" in sys.modules else None
 
 
-def confirm_cold_call(script: str, seconds: int = 300):
+def confirm_cold_call(script: str | None, seconds: int = 300):
     """Run decorated function only if it was last run within `seconds`, or by user confirmation."""
 
     def decorator(func):
         @wraps(func)
         def wrapper():
+            if script is None:
+                func()
+                return
+
             # Already cancelled in this ipytho session ⇒ re-cancel
             if ip:
                 fkey = (func.__name__, func.__module__)
