@@ -284,14 +284,17 @@ def add_lines(ax, xarr, xdim, ls, vLS, line_registry, kws, mark_stop=False):
     ds = find_categorical(ds, xdim)
     # xarr = xr.DataArray.from_series(ds, sparse=True)
 
+    # Whether `find_categorical()` split off any flat/constant lines (into the "_CAT_" tick).
+    has_flat = ("fix_" + xdim) in ds.index.names
+
     def plot1(s):
         "Do `plot` (with `mark_stop`) or `axhline` for single data series."
         x = s.index
 
-        # coords[xdim][-1] "_CAT_" is caused by find_categorical()
-        if x[-1] == "_CAT_":
-            *s, const = s
-            *x, _na = x
+        if has_flat:
+            const = s["_CAT_"]
+            s = s.drop("_CAT_")
+            x = x.drop("_CAT_")
             if not pd.isna(const):
                 return ax.axhline(const, alpha=kws["alpha"], lw=kws["lw"], ls=ls)
 
@@ -768,6 +771,39 @@ def line_plots(
     return fig_registry, handles
 
 
+def flatten_categorical(df: pd.DataFrame, dim):
+    """Undo `find_categorical()`'s split, on an *unstacked* (wide) `df`: broadcast each
+    flat/constant line's value -- held in its own, otherwise-empty, `"_CAT_"`-tagged `dim`
+    column -- across the regular (numeric) `dim` columns, instead of leaving it stranded in
+    its own extra column. This mirrors `add_lines()`'s flat-line treatment (an `axhline`
+    spanning the whole axis), but in tabular form.
+
+    The `"fix_" + dim` row level added by `find_categorical()` is kept -- unlike
+    `line_plots()`'s legend, which drops it (see "Drop categorical columns" therein),
+    relying on the plot itself (an axhline vs. a sloped line) to convey flatness for free.
+    A table has no such visual, so the level is kept, collapsed to a boolean flagging
+    whether that row/line is flat.
+    """
+    fix_dim = "fix_" + dim
+    is_cat_col = df.columns.get_level_values(dim) == "_CAT_"
+    if is_cat_col.any():
+        cat, real = df.loc[:, is_cat_col], df.loc[:, ~is_cat_col]
+        is_multi = isinstance(df.columns, pd.MultiIndex)
+        real_key = real.columns.droplevel(dim) if is_multi else pd.Index([0] * real.shape[1])
+        cat_key = cat.columns.droplevel(dim) if is_multi else pd.Index([0] * cat.shape[1])
+        cat.columns = cat_key
+        fill = cat.reindex(columns=real_key)
+        fill.columns = real.columns
+        df = real.where(real.notna(), fill)
+
+    if fix_dim in df.index.names:
+        idx = df.index.to_frame(index=False)
+        idx[fix_dim] = idx[fix_dim] != "_VAR_"
+        df.index = pd.MultiIndex.from_frame(idx)
+
+    return df
+
+
 def shape_tables(skill, orient, dim_aliases={}, col_dims=None, find_cat=False):
     """Print `skill` as a single table, instead of plotting it via `line_plots()`.
 
@@ -791,15 +827,19 @@ def shape_tables(skill, orient, dim_aliases={}, col_dims=None, find_cat=False):
         mirroring `line_plots()`'s use of `panel_col` for (visually) side-by-side
         panels. Pass `[]` for single-level (`xaxis`-only) columns.
     find_cat : bool, optional
-        Whether to split off non-numeric `xaxis` ticks into a separate ("fix_")
-        index level (see `find_categorical()`), by default `False` -- that
-        splitting is aimed at plotting (flat/constant lines), and usually isn't
-        wanted in a table.
+        Whether to treat non-numeric `xaxis` ticks (see `find_categorical()`) as
+        flat/constant lines, mirroring `line_plots()`/`add_lines()`: rather than
+        adding an extra `xaxis` tick/column (NaN for every other line, and NaN
+        at every other tick for this one), the value is broadcast across the
+        regular (numeric) `xaxis` ticks -- see `flatten_categorical()`. A
+        `"fix_" + orient.xaxis` row level then flags (boolean) which lines were
+        flattened this way. By default `False`.
 
     Returns
     -------
     pd.DataFrame
-        Row `MultiIndex`: `orient.fig`, then `orient.panel_row`, then the rest.
+        Row `MultiIndex`: `orient.fig`, then `orient.panel_row`, then the rest
+        (including a `"fix_" + orient.xaxis` boolean level if `find_cat`).
         Column index: `col_dims`, then `orient.xaxis`.
     """
     if col_dims is None:
@@ -811,8 +851,13 @@ def shape_tables(skill, orient, dim_aliases={}, col_dims=None, find_cat=False):
     if find_cat:
         ds = find_categorical(ds, orient.xaxis)
     df = ds.unstack([*col_dims, orient.xaxis])  # NB: causes NaNs if xaxis/col_dims coords differ
+    if find_cat:
+        df = flatten_categorical(df, orient.xaxis)
 
-    etc_dims = [d for d in df.index.names if d not in row_dims]
+    fix_dim = "fix_" + orient.xaxis
+    etc_dims = [d for d in df.index.names if d not in row_dims and d != fix_dim]
+    if fix_dim in df.index.names:
+        etc_dims.append(fix_dim)
     df = df.reorder_levels([*row_dims, *etc_dims], axis=0)
     df = df.sort_index(axis=0).sort_index(axis=1)
     df = df.rename_axis(index=dim_aliases, columns=dim_aliases)
