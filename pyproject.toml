@@ -28,6 +28,12 @@ dependencies = [
 requires = ["uv_build>=0.9.18,<1.0.0"]
 build-backend = "uv_build"
 
+# Temporary: use our upstream fix (pydata/sparse#951) for the nan-fill-value
+# reduction bug until it's merged & released. Revert to a normal version pin
+# (e.g. sparse>=0.<next-release>) once that happens.
+[tool.uv.sources]
+sparse = { git = "https://github.com/patnr/sparse.git", branch = "fix-reduce-nan-fill-value" }
+
 [dependency-groups]
 dev = [
     "ipdb>=0.13.13",
