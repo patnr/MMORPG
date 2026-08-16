@@ -20,7 +20,7 @@ from pathlib import Path
 
 import dill
 
-from mmorpg.local_mp import mp
+from mmorpg.dispatch.local_mp import mp
 
 if __name__ == "__main__":
     # Unpack args

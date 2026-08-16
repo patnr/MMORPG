@@ -69,6 +69,8 @@ and HTCondor, Kubernetes or AWS Batch as alternatives to SLURM.
 
 ## Development
 
+`uv sync --extra results`
+
 When developing MMORPG alongside some different project
 then you essentially need an "editable" install of MMORPG,
 but this does not transpose to remote hosts.

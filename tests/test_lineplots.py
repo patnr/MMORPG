@@ -1,5 +1,5 @@
-"""Tests for `mmorpg.xarr_lines`, focused on `shape_tables()` and its relationship to
-`line_plots()`.
+"""Tests for `mmorpg.results`/`mmorpg.results.lineplots`, focused on `shape_tables()` and its
+relationship to `line_plots()`.
 
 The workflow mirrored here (aggregate over `seed`, tune/pick-best over a regularization-like
 dim, then either tabulate via `shape_tables()` or plot via `line_plots()`) is a simplified
@@ -15,7 +15,8 @@ import pytest
 import xarray as xr
 from IPython.utils.ipstruct import Struct
 
-from mmorpg.xarr_lines import NONE, LinePlots, shape_tables
+from mmorpg.results import NONE, shape_tables
+from mmorpg.results.lineplots import LinePlots
 
 
 def build_skill(rows, index_names, mean_dims, tuned_dims):

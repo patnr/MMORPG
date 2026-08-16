@@ -24,22 +24,30 @@ Dependencies are managed with `uv` (`uv.lock` present); `pyproject.toml` targets
 
 ## Architecture
 
-`dispatch()` in `src/mmorpg/batch_runner.py` is the orchestrator. Understanding it requires
-tracing through several files together:
+`src/mmorpg/` splits into two subpackages: `dispatch/` is the dispatch/remote-execution engine
+(everything below), and `results/` (table-shaping in `__init__.py`, plotting in `lineplots.py`)
+is an independent, non-re-exported results-shaping/plotting layer — see its own module
+docstrings.
 
-1. **Project/script resolution** — `find_proj_dir(script)` walks up from the calling script to
-   find the nearest `pyproject.toml`/`requirements.txt`/`setup.py`/`.git` marker. This
-   `proj_dir` gets copied wholesale into `data_dir` (and, for remote runs, uploaded) so the
-   remote side has everything it needs to import `fun` by name — `fun` itself is never
-   pickled, only referenced by `(script, fun_name)`, since deep references in `fun` closures
-   are often unpicklable/huge.
+`dispatch()` in `src/mmorpg/dispatch/__init__.py` is the orchestrator.
+`mmorpg/__init__.py` (the top-level package) is just a thin re-export layer.
+Understanding `dispatch()` requires tracing through several files together:
+
+1. **Project/script resolution** — `find_proj_dir(script)` (`src/mmorpg/dispatch/paths.py`) walks up
+   from the calling script to find the nearest `pyproject.toml`/`requirements.txt`/`setup.py`/`.git`
+   marker. This `proj_dir` gets copied wholesale into `data_dir` (and, for remote runs,
+   uploaded) so the remote side has everything it needs to import `fun` by name — `fun` itself
+   is never pickled, only referenced by `(script, fun_name)`, since deep references in `fun`
+   closures are often unpicklable/huge.
 
 2. **Data layout** — everything lives under `data_root/proj_dir.stem/script.stem/<tag-or-timestamp>/`:
-   - `inputs/` — `inputs` list, batched into `nBatch` dill-pickled files (see `save()`)
+   - `inputs/` — `inputs` list, batched into `nBatch` dill-pickled files (see `save()` in
+     `src/mmorpg/dispatch/paths.py`)
    - `outputs/` — one dill-pickled results file per input batch, written by `batch_runner.py`
    - a copy of `proj_dir`, plus `batch_runner.py` and `slurm_job_array.sbatch`
-   `load_data()` reconstitutes results by reading & concatenating all `outputs/*` in numeric
-   order.
+
+   `load_data()` (`src/mmorpg/dispatch/paths.py`) reconstitutes results by reading & concatenating
+   all `outputs/*` in numeric order.
 
 3. **Execution paths**, chosen by `host`:
    - `"SUBPROCESS"`/`None` (default): runs `batch_runner.py` once per input batch via
@@ -47,16 +55,17 @@ tracing through several files together:
      `fun` in-process) so that local runs exercise the same logic as remote ones, for easier
      debugging.
    - any other hostname/alias (optionally with `*` glob, resolved via `resolve_host_glob()`
-     against `~/.ssh/config`): opens an `Uplink` (`src/mmorpg/uplink.py`), which wraps a
+     against `~/.ssh/config`): opens an `Uplink` (`src/mmorpg/dispatch/uplink.py`), which wraps a
      multiplexed SSH connection (`ControlMaster`/`ControlPath`, so many small commands don't
      each pay connection setup cost) plus `rsync`. `Uplink.sym_sync()` is a context manager:
      upload `data_dir` on enter, download it back on exit/exception — so results always sync
      back even on failure or Ctrl-C.
    - if the host contains `"hpc.intra.norceresearch"`: after upload, jobs are submitted as a
-     SLURM job array (`submit_and_monitor_slurm()`), which polls `squeue` for progress and, on
-     `KeyboardInterrupt`, runs `scancel` before re-raising. `slurm_job_array.sbatch` is a
-     minimal wrapper (`"$@"/$SLURM_ARRAY_TASK_ID`) — the array-index-to-input-file mapping
-     happens there, not in Python. Errors are pulled from `sacct`/`error/<task>` and re-raised.
+     SLURM job array (`submit_and_monitor_slurm()` in `src/mmorpg/dispatch/remote_ops.py`), which
+     polls `squeue` for progress and, on `KeyboardInterrupt`, runs `scancel` before re-raising.
+     `slurm_job_array.sbatch` is a minimal wrapper (`"$@"/$SLURM_ARRAY_TASK_ID`) — the
+     array-index-to-input-file mapping happens there, not in Python. Errors are pulled from
+     `sacct`/`error/<task>` and re-raised.
    - otherwise (bare remote host): each input batch is run directly over SSH via `remote.cmd()`,
      without SLURM.
 
@@ -67,16 +76,16 @@ tracing through several files together:
    than imported directly. It imports `fun` by name from `script`, loads one input batch, and
    fans it out via `local_mp.mp()`.
 
-5. **`local_mp.mp()`** (`src/mmorpg/local_mp.py`) wraps `pathos.multiprocessing` with a progress
-   bar, per-item exception catching (`log_errors=True` returns `(exception, traceback)` tuples
-   instead of raising, so one bad parameter set doesn't kill the whole batch), and a chunksize
-   heuristic. It also calls `threadpoolctl.threadpool_limits(1)` at import time so NumPy doesn't
-   oversubscribe CPUs when combined with process-level parallelism.
+5. **`local_mp.mp()`** (`src/mmorpg/dispatch/local_mp.py`) wraps `pathos.multiprocessing` with a
+   progress bar, per-item exception catching (`log_errors=True` returns `(exception, traceback)`
+   tuples instead of raising, so one bad parameter set doesn't kill the whole batch), and a
+   chunksize heuristic. It also calls `threadpoolctl.threadpool_limits(1)` at import time so
+   NumPy doesn't oversubscribe CPUs when combined with process-level parallelism.
 
-6. **Dependency installation on remote** — `install_deps()` runs a list of shell commands
-   (`setup` param, default `"uv"`) against a `venv` path, with `{proj_name}`/`{venv}`
-   placeholder substitution. `setups.py` holds example command lists for `uv`/`conda`/`pip`/HPC
-   module systems. The venv is intentionally a *central* cache location
+6. **Dependency installation on remote** — `install_deps()` (`src/mmorpg/dispatch/remote_ops.py`)
+   runs a list of shell commands (`setup` param, default `"uv"`) against a `venv` path, with
+   `{proj_name}`/`{venv}` placeholder substitution. `setups.py` holds example command lists for
+   `uv`/`conda`/`pip`/HPC module systems. The venv is intentionally a *central* cache location
    (`~/.cache/venvs/{proj_name}`), not `{proj_dir}/.venv`, so re-uploads don't force
    re-creating the environment each time.
 
@@ -96,4 +105,16 @@ tracing through several files together:
 - Editable local development of `mmorpg` itself alongside a consuming project requires
   symlinking (`ln -s path/to/src/mmorpg your_project/mmorpg`) plus `RSYNC_OPTS="-L"` in the
   environment so the symlink gets dereferenced on upload (see README "Development" section).
+- `dispatch/` (dispatch engine) and `results/` (tables/plotting) are independent subpackages —
+  don't re-export `results/` symbols from the top-level `__init__.py`; consumers import
+  `mmorpg.results`/`.lineplots` directly. The one intentional exception is `results/__init__.py`
+  importing `get_data_dir`/`load_data` from `dispatch.paths` for re-export (both are
+  lightweight — `dill`/`tqdm` only — so this doesn't pull the heavy `results` deps into
+  `dispatch`, only the reverse, which is fine); don't add further `dispatch/` → `results/`
+  imports beyond that without similar justification.
+- The `dispatch()` function lives in `dispatch/__init__.py` itself, not in a `dispatch.py`
+  submodule — that submodule name would collide with the function name and the package name.
+  Keep it that way; if `dispatch/__init__.py` ever needs to shrink, split its *internals* into
+  a differently-named submodule (e.g. `engine.py`) and re-export, rather than reintroducing a
+  `dispatch/dispatch.py`.
 - `Uplink.rsync()` reads `RSYNC_OPTS` from the environment and prepends it to its own opts.
