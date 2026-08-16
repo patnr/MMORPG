@@ -140,15 +140,50 @@ def enum_explode(s: pd.Series, idx_name):
     return t
 
 
-def pd_sel(s: pd.Series, dct, drop=True):
-    """Select pandas Series/DataFrame by `.loc[]` applied to a dict.
+def dicts2index(xps) -> pd.Index:
+    """Convert a list of experiment-input dicts (e.g. `load_data(data_dir / "inputs")`) into
+    the `pd.MultiIndex` of a to-be-populated results table/`DataArray`.
 
-    Similar to `xarray.DataArray.sel`, but for pandas. Alternatives:
+    - Drops exact duplicates (which don't make sense, and don't fit with xarray).
+    - Gives functions/callables a prettier repr (their `__name__`), column-wise for speed.
+    - The df instantiation detects missing keys (yay!) and converts them and None's to NaNs (nay!),
+      ⇒ {missing keys, None, NaN} are henceforth indistinguishable! But NaNs are generally not supported
+      for _sparse_ xarray coords. Workaround: replace by custom string value.
+    """
+    df = pd.DataFrame(xps)
+
+    dupes = df.duplicated()
+    if any(dupes):
+        warnings.warn(f"{dupes.sum()} duplicate xp's found & removed.")
+        df = df[~dupes.values]
+
+    for col in df:
+        if df[col].dtype == object:
+            df[col] = df[col].map(lambda x: x.__name__ if hasattr(x, "__name__") else x)
+
+    df = df.fillna(NONE)
+    df = df.set_index(df.columns.tolist())
+    return df.index
+
+
+def pd_sel(s: pd.Series, dct, drop=False, assert_nonempty=True):
+    """Similar to `df.loc[]` but applied to a dict.
+
+    Also see
+    --------
+    Resembles `xarray.DataArray.sel` but singleton levels of resulting index only dropped if `drop`.
 
     - `df.xs()` is for cross-sectioning, i.e. selecting a single value.
     - `df.iloc[]` is for integer-location based indexing.
 
-    If `drop` then drop singleton levels of the _resulting_ index.
+    Parameters
+    ----------
+    drop : bool, optional
+        If `True`, drop singleton levels of the _resulting_ index.
+        `False` by default because then you don't have to remember to
+        also edit `orient` every time you sloppily toggle a filter in the input `dct`.
+    assert_nonempty : bool, optional
+        If `True`, raise an `AssertionError` if the resulting selection is empty.
 
     Example:
 
@@ -160,11 +195,12 @@ def pd_sel(s: pd.Series, dct, drop=True):
     ...     iter=[0, 1, *range(7, 15)],
     ... )
     >>> sub_df = pd_sel(df, dct, True)
-
-    You may need to do `s = s.sort_index()` beforehand.
     """
     idx = tuple(dct.get(k, slice(None)) for k in s.index.names)
     sub = s.loc[idx]
+
+    if assert_nonempty:
+        assert len(sub), "Selection appears to be empty!"
     if drop:
         lvls = [k for k in sub.index.names if sub.index.get_level_values(k).nunique() == 1]
         sub = sub.droplevel(lvls)
