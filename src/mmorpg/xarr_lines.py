@@ -271,9 +271,11 @@ class LinePlots:
 
     Consolidates what used to be free functions `line_plots()` + `add_lines()` +
     `_legend_parts()` + `set_panel_col_label()`/`set_panel_row_label()`/`clear_fig()` plus the
-    `PartialShow` class: the plotting internals share state (`line_registry`, `fig_registry`,
-    `handles`) that used to be threaded by hand across `line_plots()` -> `PartialShow(...)` ->
-    `save_all(..., handles=...)`; here they just live on `self`.
+    `PartialShow` class: the post-construction state (`fig_registry`, `handles`) that used to
+    be threaded by hand across `line_plots()` -> `PartialShow(...)` -> `save_all(...,
+    handles=...)` now just lives on `self`. `line_registry` (the raw, un-deduped accumulator
+    `_add_lines()` fills in across the fig/panel/linestyle/hue loop) stays a local variable in
+    `_plot()` -- it's only needed to build `handles`, never read afterward.
 
     `only_these()` and `save()` are the two methods meant to be called after construction;
     everything else (prefixed `_`) is internal wiring for `__init__`.
@@ -367,7 +369,6 @@ class LinePlots:
         self.meta = meta
         self.show_alpha = show_alpha
         self.current_glow = []
-        self.line_registry = {}
         self.fig_registry = []
         self.handles = None
 
@@ -437,8 +438,10 @@ class LinePlots:
         line0s = [lines[0] for lines in handles.values]
         return title, labels, line0s
 
-    def _add_lines(self, ax, xarr, xdim, ls, vLS, kws, mark_stop=False):
-        """Plot lines (including those flat/constant) onto `ax`."""
+    @staticmethod
+    def _add_lines(ax, xarr, xdim, ls, vLS, line_registry, kws, mark_stop=False):
+        """Plot lines (including those flat/constant) onto `ax`, registering them into
+        `line_registry` (mutated in place)."""
 
         if xarr.data.nnz == 0:
             return
@@ -492,7 +495,7 @@ class LinePlots:
         for i, (_coord, series) in enumerate(stack.iterrows()):
             # s = ds.loc[_coord]  # series w/o NaNs, possibly caused by `unstack`
             line = plot1(series)
-            self.line_registry.setdefault(labls[i], []).append(line)
+            line_registry.setdefault(labls[i], []).append(line)
 
     def _plot(
         self,
@@ -521,6 +524,7 @@ class LinePlots:
         kws = dict(lw=lw, ms=ms, alpha=alpha, marker=marker)
 
         fig_registry = self.fig_registry
+        line_registry = {}
 
         for vFig in projection(skill, orient.fig):
             fign = f"{fig_title} -- {vFig}"
@@ -554,7 +558,9 @@ class LinePlots:
                                 },
                                 drop=True,
                             )
-                            self._add_lines(ax, xSect, orient.xaxis, ls, vLS, kws, mark_stop)
+                            self._add_lines(
+                                ax, xSect, orient.xaxis, ls, vLS, line_registry, kws, mark_stop
+                            )
 
                     # xscale
                     # NOTE: it seems necessary to apply this here (rather than outside this function)
@@ -596,9 +602,9 @@ class LinePlots:
 
         # MultiIndex-ed lists of line handles
         handles = pd.Series(
-            data=list(self.line_registry.values()),
+            data=list(line_registry.values()),
             index=pd.MultiIndex.from_tuples(
-                self.line_registry.keys(), names=list(self.line_registry)[0]._fields
+                line_registry.keys(), names=list(line_registry)[0]._fields
             ),
             name="line handles",
         )
