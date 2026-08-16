@@ -7,8 +7,8 @@ and requires some workarounds that make it easier to just do the processing ours
 
 Meanwhile it's tempting to just call `plt.plot(..., shape_tables())`.
 since `shape_tables()` uses a few pandas API calls,
-which is seemingly reinvented by the more elaborate `line_plots()` (relying on xarray).
-But `line_plots()` nests `.sel()` calls (one per fig/panel/linestyle/unlabelled leaf) and only
+which is seemingly reinvented by the more elaborate `LinePlots` (relying on xarray).
+But `LinePlots` nests `.sel()` calls (one per fig/panel/linestyle/unlabelled leaf) and only
 unstacks (i.e. *densifies*) `xdim` *within* each already-narrowed leaf.
 Meanwhile `shape_tables()` instead unstacks the *entire* `skill` in one shot (less overhead).
 But for a ragged grid of experiments (e.g. different `fig`/`panel_row`/... groups cover different `xaxis` ticks)
@@ -230,33 +230,6 @@ def find_categorical(ds, dim):
     return ds
 
 
-def clear_fig(num, figsize=None, **kwargs):
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", category=UserWarning)
-        plt.figure(num=num, figsize=figsize, **kwargs).clear()
-
-
-def set_panel_col_label(ax, dct, nickname, keys=True):
-    if keys:
-        txt = "\n".join(f"$\\bf{{{nickname(k)}}}$ {v}" for (k, v) in dct.items())
-    else:
-        txt = "\n".join(f"{v}" for v in dct.values())
-    ax.xaxis.set_label_position("top")
-    ax.xaxis.set_label_coords(0.5, 1.03)
-    ax.set_xlabel(txt, fontsize=14, bbox=lbox, va="bottom", ha="center")
-
-
-def set_panel_row_label(ax, dct, nickname, keys=True):
-    if keys:
-        # m = max(map(len, dct))
-        txt = "\n".join(f"$\\bf{{{nickname(k)}}}$ {v}" for (k, v) in dct.items())
-    else:
-        txt = "\n".join(f"{v}" for v in dct.values())
-    ax.yaxis.set_label_position("right")
-    ax.yaxis.set_label_coords(1.03, 0.5)
-    ax.set_ylabel(txt, fontsize=14, bbox=lbox, va="bottom", rotation=-90, ha="center")
-
-
 def validate(orient, data_dims):
     """Validate `orient` structure."""
     seen = []
@@ -272,24 +245,6 @@ def validate(orient, data_dims):
             assert dim not in seen, f"'{dim}' listed more than once in `orient`."
             seen.append(dim)
             assert dim in data_dims, f"'{dim}' not found among data."
-
-
-def sharey_recommended(skill_space):
-    """Recommend a `sharey` value for `line_plots`, given the (caller-defined) `skill_space`.
-
-    `skill_space` lists the `orient` roles (e.g. `["fig", "panel_row"]`) whose subspaces the
-    caller has independently rescaled (e.g. via a 0-to-1 normalization) before plotting --
-    typically paired with `scale01()`/`normalize_spaces()`-like preprocessing done by the caller.
-    """
-    if "panel_row" in skill_space and "panel_col" in skill_space:
-        sharey = "all"
-    elif "panel_row" in skill_space:
-        sharey = "row"
-    elif "panel_col" in skill_space:
-        sharey = "col"
-    else:
-        sharey = False
-    return sharey
 
 
 def scale01(x: xr.DataArray, groupby: list, xaxis: str, min_like="min"):
@@ -310,86 +265,436 @@ def scale01(x: xr.DataArray, groupby: list, xaxis: str, min_like="min"):
     return skill
 
 
-def add_lines(ax, xarr, xdim, ls, vLS, line_registry, kws, mark_stop=False):
-    """Plot lines (including those flat/constant) onto `ax`."""
+class LinePlots:
+    """Build multi-panel line plots from a sparse `xr.DataArray`, with legend dedup and
+    partial-show/glow controls for progressive reveal, plus figure saving.
 
-    if xarr.data.nnz == 0:
-        return
+    Consolidates what used to be free functions `line_plots()` + `add_lines()` +
+    `_legend_parts()` + `set_panel_col_label()`/`set_panel_row_label()`/`clear_fig()` plus the
+    `PartialShow` class: the plotting internals share state (`line_registry`, `fig_registry`,
+    `handles`) that used to be threaded by hand across `line_plots()` -> `PartialShow(...)` ->
+    `save_all(..., handles=...)`; here they just live on `self`.
 
-    ds = sparse_to_series(xarr)
-    ds = find_categorical(ds, xdim)
-    # xarr = xr.DataArray.from_series(ds, sparse=True)
+    `only_these()` and `save()` are the two methods meant to be called after construction;
+    everything else (prefixed `_`) is internal wiring for `__init__`.
 
-    # Whether `find_categorical()` split off any flat/constant lines (into the "_CAT_" tick).
-    has_flat = ("fix_" + xdim) in ds.index.names
-
-    def plot1(s):
-        "Do `plot` (with `mark_stop`) or `axhline` for single data series."
-        x = s.index
-
-        if has_flat:
-            const = s["_CAT_"]
-            s = s.drop("_CAT_")
-            x = x.drop("_CAT_")
-            if not pd.isna(const):
-                return ax.axhline(const, alpha=kws["alpha"], lw=kws["lw"], ls=ls)
-
-        line = ax.plot(x, s, **kws, ls=ls)[0]
-
-        # Add stopping markers
-        if mark_stop:
-            idx_notna = pd.notna(series).values.nonzero()[0]
-            if np.any(idx_notna):
-                x = series.index[idx_notna[-1]]
-                y = series.iloc[idx_notna[-1]]
-                line.scatter = ax.scatter(x, y, kws["ms"] ** 2, marker="s", alpha=kws["alpha"])
-
-        return line
-
-    # Ensure 2-level index
-    if ds.index.nlevels == 1:
-        ds = pd.concat(dict(DUMMY=ds), names=["singleton_hue"])  # similar to expand_dims
-    # Move xaxis from index level to column index
-    stack = ds.unstack(xdim)  # NB: causes NaNs if xdim coords differ
-
-    # Legend labels
-    labls = stack.index.to_frame(index=False)
-    # Add column(s) for the linestyle key
-    for dim in vLS:
-        labls[dim] = vLS[dim]
-
-    # As (list of) of hashable (for registering) tuples
-    labls = list(labls.itertuples(index=False, name="Label"))
-
-    # Plot
-    for i, (_coord, series) in enumerate(stack.iterrows()):
-        # s = ds.loc[_coord]  # series w/o NaNs, possibly caused by `unstack`
-        line = plot1(series)
-        line_registry.setdefault(labls[i], []).append(line)
-
-
-def _legend_parts(handles):
-    """Derive `(title, labels, line0s)` for `handles`'s legend from its (deduped) index.
-
-    Recomputed fresh from `handles` every time (rather than cached), so this stays correct
-    even after `handles` is mutated in place (e.g. by `groupby(...).sum()`), and works
-    uniformly regardless of how many entries `handles` has -- including 0 or 1.
+    Parameters
+    ----------
+    skill : xr.DataArray
+        Must use sparse underlying data.
+    orient : Struct
+        Dict mapping dims of plots to list of dims of `skill`.
+    meta : dict, optional
+        Additional info to list in legend, by default {}.
+    dim_aliases : dict, optional
+        Nick names, by default {}.
+    fig_title : str, optional
+        Figure title (prefix), by default "".
+    sharey : str, optional
+        "all" | False | "row" | "col", by default False.
+        Use `LinePlots.sharey_recommended(skill_space)` to compute a recommended value based
+        on which `orient` roles you've independently rescaled (e.g. via `scale01`) before
+        plotting.
+    sharex : str, optional
+        "all" | False | "row" | "col", by default "col".
+    axes_labelcolor : str, optional
+        Apply to sup-x/y-labels, which go along with xtics and yticks.
+        Not to be confused with `axes.labelcolor` (applies to an axes' xlabel and ylabel),
+        which we use for panel row/column indicators.
+    cmap : str, optional
+        "Spectral", "viridis", "tab20c", "tab20c", "jet", "Dark2", "Accent", by default "tab20".
+    possible_linestyles : list, optional
+        List of possible line styles, by default ["-", "--", ":", "-."].
+    alpha : float, optional
+        Alpha value for line transparency, by default 0.9.
+    lw : int, optional
+        Line width, by default 3.
+    ms : int, optional
+        Marker size, by default 7.
+    mark_stop : bool, optional
+        Add square stopping marker, by default True.
+    ls_once : bool, optional
+        Each linestyle only gets labelled once, by default False.
+    show_alpha : float or (float, float), optional
+        Used by `only_these()`: line transparency `a` for entries in `iShow`, else `b`
+        (default 0), where `a, b = show_alpha` if `show_alpha` is a pair, else `a = show_alpha`.
+        By default (`None`), `only_these()` uses visibility (on/off), instead of transparency,
+        to distinguish `iShow`.
     """
-    if len(handles) == 0:
-        return "", [], []
-    title, *labels = handles.index.to_frame(index=False).to_string(index=False).splitlines()
-    line0s = [lines[0] for lines in handles.values]
-    return title, labels, line0s
 
+    @staticmethod
+    def sharey_recommended(skill_space):
+        """Recommend a `sharey` value, given the (caller-defined) `skill_space`.
 
-class PartialShow:
-    """Simple setting of visibility/glow for many lines, figs, and deduplicated legend.
+        `skill_space` lists the `orient` roles (e.g. `["fig", "panel_row"]`) whose subspaces
+        the caller has independently rescaled (e.g. via a 0-to-1 normalization) before
+        plotting -- typically paired with `scale01()`/`normalize_spaces()`-like preprocessing
+        done by the caller.
+        """
+        if "panel_row" in skill_space and "panel_col" in skill_space:
+            sharey = "all"
+        elif "panel_row" in skill_space:
+            sharey = "row"
+        elif "panel_col" in skill_space:
+            sharey = "col"
+        else:
+            sharey = False
+        return sharey
 
-    `handles`, `fig_registry`: as returned by `line_plots()`. The legend figure/axes is
-    assumed to be the last entry of `fig_registry` (as arranged by `line_plots`).
+    def __init__(
+        self,
+        skill: xr.DataArray,
+        orient: Struct,
+        meta={},
+        dim_aliases={},
+        aliases={},
+        fig_title="",
+        sharey=False,
+        sharex="col",
+        xscale="linear",
+        axes_labelcolor=None,
+        cmap="tab20",
+        possible_linestyles=["-", "--", ":", "-."],
+        alpha=0.9,
+        lw=3,
+        ms=7,
+        mark_stop=True,
+        ls_once=False,
+        show_alpha=None,
+    ):
+        self.orient = orient
+        self.dim_aliases = dim_aliases
+        self.meta = meta
+        self.show_alpha = show_alpha
+        self.current_glow = []
+        self.line_registry = {}
+        self.fig_registry = []
+        self.handles = None
 
-    Usage: `only_show = PartialShow(handles, fig_registry).only_these`
-    """
+        self._plot(
+            skill,
+            dim_aliases,
+            aliases,
+            fig_title,
+            sharey,
+            sharex,
+            xscale,
+            axes_labelcolor,
+            cmap,
+            possible_linestyles,
+            alpha,
+            lw,
+            ms,
+            mark_stop,
+            ls_once,
+        )
+
+    def _nickname(self, dim):
+        for key in self.dim_aliases:
+            if key in dim:
+                idx = dim.index(key)
+                dim = dim[:idx] + self.dim_aliases[key] + dim[idx + len(key) :]
+        return dim
+
+    @staticmethod
+    def _clear_fig(num, figsize=None, **kwargs):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=UserWarning)
+            plt.figure(num=num, figsize=figsize, **kwargs).clear()
+
+    @staticmethod
+    def _set_panel_col_label(ax, dct, nickname, keys=True):
+        if keys:
+            txt = "\n".join(f"$\\bf{{{nickname(k)}}}$ {v}" for (k, v) in dct.items())
+        else:
+            txt = "\n".join(f"{v}" for v in dct.values())
+        ax.xaxis.set_label_position("top")
+        ax.xaxis.set_label_coords(0.5, 1.03)
+        ax.set_xlabel(txt, fontsize=14, bbox=lbox, va="bottom", ha="center")
+
+    @staticmethod
+    def _set_panel_row_label(ax, dct, nickname, keys=True):
+        if keys:
+            # m = max(map(len, dct))
+            txt = "\n".join(f"$\\bf{{{nickname(k)}}}$ {v}" for (k, v) in dct.items())
+        else:
+            txt = "\n".join(f"{v}" for v in dct.values())
+        ax.yaxis.set_label_position("right")
+        ax.yaxis.set_label_coords(1.03, 0.5)
+        ax.set_ylabel(txt, fontsize=14, bbox=lbox, va="bottom", rotation=-90, ha="center")
+
+    @staticmethod
+    def _legend_parts(handles):
+        """Derive `(title, labels, line0s)` for `handles`'s legend from its (deduped) index.
+
+        Recomputed fresh from `handles` every time (rather than cached), so this stays correct
+        even after `handles` is mutated in place (e.g. by `groupby(...).sum()`), and works
+        uniformly regardless of how many entries `handles` has -- including 0 or 1.
+        """
+        if len(handles) == 0:
+            return "", [], []
+        title, *labels = handles.index.to_frame(index=False).to_string(index=False).splitlines()
+        line0s = [lines[0] for lines in handles.values]
+        return title, labels, line0s
+
+    def _add_lines(self, ax, xarr, xdim, ls, vLS, kws, mark_stop=False):
+        """Plot lines (including those flat/constant) onto `ax`."""
+
+        if xarr.data.nnz == 0:
+            return
+
+        ds = sparse_to_series(xarr)
+        ds = find_categorical(ds, xdim)
+        # xarr = xr.DataArray.from_series(ds, sparse=True)
+
+        # Whether `find_categorical()` split off any flat/constant lines (into the "_CAT_" tick).
+        has_flat = ("fix_" + xdim) in ds.index.names
+
+        def plot1(s):
+            "Do `plot` (with `mark_stop`) or `axhline` for single data series."
+            x = s.index
+
+            if has_flat:
+                const = s["_CAT_"]
+                s = s.drop("_CAT_")
+                x = x.drop("_CAT_")
+                if not pd.isna(const):
+                    return ax.axhline(const, alpha=kws["alpha"], lw=kws["lw"], ls=ls)
+
+            line = ax.plot(x, s, **kws, ls=ls)[0]
+
+            # Add stopping markers
+            if mark_stop:
+                idx_notna = pd.notna(series).values.nonzero()[0]
+                if np.any(idx_notna):
+                    x = series.index[idx_notna[-1]]
+                    y = series.iloc[idx_notna[-1]]
+                    line.scatter = ax.scatter(x, y, kws["ms"] ** 2, marker="s", alpha=kws["alpha"])
+
+            return line
+
+        # Ensure 2-level index
+        if ds.index.nlevels == 1:
+            ds = pd.concat(dict(DUMMY=ds), names=["singleton_hue"])  # similar to expand_dims
+        # Move xaxis from index level to column index
+        stack = ds.unstack(xdim)  # NB: causes NaNs if xdim coords differ
+
+        # Legend labels
+        labls = stack.index.to_frame(index=False)
+        # Add column(s) for the linestyle key
+        for dim in vLS:
+            labls[dim] = vLS[dim]
+
+        # As (list of) of hashable (for registering) tuples
+        labls = list(labls.itertuples(index=False, name="Label"))
+
+        # Plot
+        for i, (_coord, series) in enumerate(stack.iterrows()):
+            # s = ds.loc[_coord]  # series w/o NaNs, possibly caused by `unstack`
+            line = plot1(series)
+            self.line_registry.setdefault(labls[i], []).append(line)
+
+    def _plot(
+        self,
+        skill,
+        dim_aliases,
+        aliases,
+        fig_title,
+        sharey,
+        sharex,
+        xscale,
+        axes_labelcolor,
+        cmap,
+        possible_linestyles,
+        alpha,
+        lw,
+        ms,
+        mark_stop,
+        ls_once,
+    ):
+        orient = self.orient
+        nickname = self._nickname
+
+        # While it would be nice to adapt marker if a panel has shorter x-axis,
+        # that would create confusion in legend (even if duplicate items are included).
+        marker = "o" if len(skill[orient.xaxis]) < 9 else None
+        kws = dict(lw=lw, ms=ms, alpha=alpha, marker=marker)
+
+        fig_registry = self.fig_registry
+
+        for vFig in projection(skill, orient.fig):
+            fign = f"{fig_title} -- {vFig}"
+            self._clear_fig(fign, figsize=(8, 4))
+            fig, axs = plt.subplots(
+                num=fign,
+                nrows=len(projection(skill, orient.panel_row)),
+                ncols=len(projection(skill, orient.panel_col)),
+                squeeze=False,
+                sharex=True if sharex == "fig" else sharex,
+                sharey=sharey,
+            )
+            fig_registry.append(fig)
+
+            for iPanel, uPanel in enumerate(projection(skill, orient.panel_row)):
+                for jPanel, vPanel in enumerate(projection(skill, orient.panel_col)):
+                    ax = axs[iPanel, jPanel]
+
+                    for iLS, vLS in enumerate(projection(skill, orient.linestyle)):
+                        ls = possible_linestyles[iLS]
+
+                        for vUnlabelled in projection(skill, orient.unlabelled):
+                            # Select cross-section of data to be plotted
+                            xSect = skill.sel(
+                                {
+                                    **vFig,
+                                    **uPanel,
+                                    **vPanel,
+                                    **vLS,
+                                    **vUnlabelled,
+                                },
+                                drop=True,
+                            )
+                            self._add_lines(ax, xSect, orient.xaxis, ls, vLS, kws, mark_stop)
+
+                    # xscale
+                    # NOTE: it seems necessary to apply this here (rather than outside this function)
+                    # because otherwise the xlim autoscaling (ref rcParam "xmargin") won't propely apply.
+                    # NB: it's best not to fiddle with xlim (herein) because arduous to respect `sharex`.
+                    if xscale == "log" and ax.get_xlim()[0] <= 0:
+                        print("Warning: xscale is 'log' but ∃ vals<=0. Switching to 'symlog'.")
+                        xscale = "symlog"  # prevents repeat warnings
+                    if xscale == "symlog":
+                        ax.set_xscale(xscale, linthresh=1, linscale=0.1)
+                    else:
+                        ax.set_xscale(xscale)
+
+                    # ylabel
+                    if isinstance(skill.name, str) and "(%)" in skill.name:
+                        ax.set_yticks([0, 25, 50, 75, 100])
+                        ax.set_yticklabels([None, 25, 50, 75, 100])
+
+                    # grid
+                    ax.grid(True, "both", axis="both")
+
+                    # Sup-x/y-label padding
+                    gs = ax.get_subplotspec()
+                    if gs.is_first_col():
+                        ax.set_ylabel(" ")
+                    if gs.is_last_row():
+                        ax.set_xlabel(" ")
+
+                    # Panel-col/row labels
+                    if gs.is_first_row():
+                        self._set_panel_col_label(ax, vPanel, nickname, gs.is_first_col())
+                    if gs.is_last_col():
+                        self._set_panel_row_label(ax, uPanel, nickname, gs.is_first_row())
+
+            with plt.rc_context({} if axes_labelcolor is None else {"text.color": axes_labelcolor}):
+                fig.supylabel(str(skill.name), x=0.03, y=0.55)
+                fig.supxlabel(nickname(orient.xaxis), y=0.04)
+            fig.tight_layout(h_pad=0.1, w_pad=0.1, pad=1.3 if axs.size > 1 else 3.0)
+
+        # MultiIndex-ed lists of line handles
+        handles = pd.Series(
+            data=list(self.line_registry.values()),
+            index=pd.MultiIndex.from_tuples(
+                self.line_registry.keys(), names=list(self.line_registry)[0]._fields
+            ),
+            name="line handles",
+        )
+
+        # Color
+        # Ignore linestyle for the purpose of coloring
+        color_df = handles.unstack(orient.linestyle)
+        if isinstance(color_df, pd.Series):
+            color_df = color_df.to_frame()
+        for i, (_label, lines) in enumerate(color_df.iterrows()):
+            for line in np.ravel(list(lines)):
+                # Must be listed colormap
+                colr = plt.colormaps[cmap](i % plt.colormaps[cmap].N)
+                line.set_color(colr)
+                if sc := getattr(line, "scatter", None):
+                    sc.set_facecolor(colr)
+
+        # Legend
+        self._clear_fig("legend", figsize=(4, 4), frameon=False)
+        fig, ax0 = plt.subplots(num="legend")
+        ax0.axis("off")
+
+        # Easier to work with df than MultiIndex
+        labels = handles.index.to_frame(index=False)
+
+        # Drop unnecessary cols -- unless that would drop *all* of them (e.g. len(handles) <= 1,
+        # where every col is trivially "all same"), in which case keep them all so there's still
+        # something to show in the legend, and `pd.MultiIndex.from_frame` below doesn't choke on
+        # a 0-column frame.
+        not_all_same = labels.nunique().gt(1)
+        if not not_all_same.any():
+            not_all_same[:] = True
+        # Add to meta
+        for col in labels.columns:
+            if not not_all_same[col]:
+                self.meta[col] = str(labels[col].iloc[0])
+        labels = labels.loc[:, not_all_same]
+        # labels = labels.drop(columns="singleton_hue", errors="ignore")  # rm dummy
+
+        # Each ls only gets labelled once
+        if ls_once and orient.linestyle:
+            vLS0 = projection(skill, orient.linestyle)[0]
+            if vLS0 is not None:
+                # Set non-ls coords to "*" (thus creating duplicate labels) if vLS != vLS[0]
+                once = (labels[list(vLS)] != vLS0).all(axis=1)
+                labels.loc[once, labels.columns.difference(vLS)] = "*"
+
+        # Drop categorical columns (starting with `fix_`)
+        labels = labels.loc[:, ~labels.columns.str.startswith("fix_")]
+        # OR: prettify
+        # labels.columns = [ f"({lbl[4:]})" if lbl.startswith("fix_") else lbl for lbl in labels.columns ]
+        # labels = labels.replace("_VAR_", "")
+
+        # Alias
+        labels = labels.replace(NONE, "N/A")
+        labels = labels.rename(columns=dim_aliases)
+        for dim in aliases:
+            if dim in labels.columns:
+                labels[dim] = labels[dim].replace(aliases[dim])
+
+        # Merge equal rows
+        handles.index = pd.MultiIndex.from_frame(labels)
+        handles = handles.groupby(level=list(range(handles.index.nlevels))[::-1]).sum()
+
+        # Draw legend
+        title, labels, line0s = self._legend_parts(handles)
+        legend = ax0.legend(line0s, labels, title=title, **legend_mono)
+
+        # Add meta for *all* data
+        already_labelled = ["fig", "panel_row", "panel_col", "xaxis", "linestyle"]
+        full_meta = {**{k: [nickname(d) for d in v] for (k, v) in orient.items()}, **self.meta}
+        full_meta = {k: v for (k, v) in full_meta.items() if k not in already_labelled}
+        full_meta = yaml.dump(full_meta, indent=4, Dumper=IndentedDumper, sort_keys=False).replace(
+            NONE, "·"
+        )
+        full_meta = full_meta.rstrip("\n")  # trailing newline
+        # Place text below legend
+        # Ref stackoverflow.com/q/49355810
+        meta_text = ax0.annotate(
+            full_meta,
+            xy=(0, 0),
+            xytext=(0, 0),
+            xycoords="figure fraction",
+            textcoords=OffsetFrom(legend, (0, -0.1)),
+            horizontalalignment="left",
+            verticalalignment="top",
+            size="x-small",
+        )
+        # Get bbox including both legend and meta
+        bb = Bbox.union([legend.get_window_extent(), meta_text.get_window_extent()])
+        # bb = bb.transformed(fig.dpi_scale_trans.inverted())
+        handles.total_bbox = bb
+
+        fig_registry.append(fig)
+
+        self.handles = handles
 
     @staticmethod
     # Modified from mpl dhaitz/mplcyberpunk to add kwargs
@@ -452,38 +757,22 @@ class PartialShow:
                     if sc := getattr(line, "scatter", None):
                         sc.set_visible(visibility)
 
-    def __init__(self, handles, fig_registry, alpha=None):
-        """
-        Parameters
-        ----------
-        handles, fig_registry
-            As returned by `line_plots()`.
-        alpha : float or (float, float), optional
-            Line transparency: `a` for entries in `iShow`, else `b` (default 0), where
-            `a, b = alpha` if `alpha` is a pair, else `a = alpha`. By default (`None`),
-            use visibility (on/off), instead of transparency, to distinguish `iShow`.
-        """
-        self.handles = handles
-        self.fig_registry = fig_registry
-        self.alpha = alpha
-        self.current_glow = []
-
     def only_these(self, iShow, iGlow):
-        """Show/hide/glow legend entries `iShow`/`iGlow` (both index `handles`, or `True` for all).
+        """Show/hide/glow legend entries `iShow`/`iGlow` (both index `self.handles`, or `True` for all).
 
         Parameters
         ----------
         iShow : list or True
-            Indices (into `handles`) of the entries to show. If `self.alpha` is set, all
-            entries are shown, with `alpha` distinguishing between "in `iShow`" or not
-            (rather than the "shown"/hidden line visibility that's used if `alpha=None`).
+            Indices (into `self.handles`) of the entries to show. If `self.show_alpha` is set,
+            all entries are shown, with alpha distinguishing between "in `iShow`" or not
+            (rather than the "shown"/hidden line visibility that's used if `show_alpha=None`).
         iGlow : list or True
-            Indices (into `handles`) of the entries to add a glow effect to.
+            Indices (into `self.handles`) of the entries to add a glow effect to.
         """
         handles = self.handles
         fig_registry = self.fig_registry
         current_glow = self.current_glow
-        alpha = self.alpha
+        show_alpha = self.show_alpha
 
         ax0 = fig_registry[-1].axes[0]
         ALL = list(range(len(handles)))
@@ -508,15 +797,15 @@ class PartialShow:
 
         for i, (_idx, lines) in enumerate(handles.items()):
             # Visibility
-            if alpha is None:
+            if show_alpha is None:
                 # Using `visible`
                 self.set_visibility(lines, i in iShow)
             else:
                 # Using `alpha`
                 try:
-                    a, b = alpha
+                    a, b = show_alpha
                 except TypeError:
-                    a = alpha
+                    a = show_alpha
                     b = 0
                 self.set_visibility(lines, alpha=a if i in iShow else b)
 
@@ -547,7 +836,7 @@ class PartialShow:
         #   * the text (label) is not toggled
         #   * savefig() misplaces glow (for all data transformation I tried).
         # So instead, we redraw the legend entirely
-        title, labels, line0s = _legend_parts(handles)
+        title, labels, line0s = self._legend_parts(handles)
         lines = line0s[:]
         for i in iGlow:
             # glow = plt.Line2D([], [], linestyle="-", color=alert, linewidth=6, alpha=0.7)
@@ -555,7 +844,7 @@ class PartialShow:
             lines[i] = (*lines[i].glow_lines, lines[i])
         # Sub-select
         labls = labels[:]
-        if alpha is None:
+        if show_alpha is None:
             lines = [lines[i] for i in iShow]
             labls = [labls[i] for i in iShow]
         # Draw
@@ -564,258 +853,112 @@ class PartialShow:
         else:
             ax0.legend(lines, labls, title=title, **legend_mono)
 
-
-def line_plots(
-    skill: xr.DataArray,
-    orient: Struct,
-    meta={},
-    dim_aliases={},
-    aliases={},
-    fig_title="",
-    sharey=False,
-    sharex="col",
-    xscale="linear",
-    axes_labelcolor=None,
-    cmap="tab20",
-    possible_linestyles=["-", "--", ":", "-."],
-    alpha=0.9,
-    lw=3,
-    ms=7,
-    mark_stop=True,
-    ls_once=False,
-):
-    """
-    Parameters
-    ----------
-    skill : xr.DataArray
-        Must use sparse underlying data.
-    orient : Struct
-        Dict mapping dims of plots to list of dims of `skill`.
-    meta : dict, optional
-        Additional info to list in legend, by default {}.
-    dim_aliases : dict, optional
-        Nick names, by default {}.
-    fig_title : str, optional
-        Figure title (prefix), by default "".
-    sharey : str, optional
-        "all" | False | "row" | "col", by default False.
-        Use `sharey_recommended(skill_space)` to compute a recommended value based on which
-        `orient` roles you've independently rescaled (e.g. via `scale01`) before plotting.
-    sharex : str, optional
-        "all" | False | "row" | "col", by default "col".
-    axes_labelcolor : str, optional
-        Apply to sup-x/y-labels, which go along with xtics and yticks.
-        Not to be confused with `axes.labelcolor` (applies to an axes' xlabel and ylabel),
-        which we use for panel row/column indicators.
-    cmap : str, optional
-        "Spectral", "viridis", "tab20c", "tab20c", "jet", "Dark2", "Accent", by default "tab20".
-    possible_linestyles : list, optional
-        List of possible line styles, by default ["-", "--", ":", "-."].
-    alpha : float, optional
-        Alpha value for line transparency, by default 0.9.
-    lw : int, optional
-        Line width, by default 3.
-    ms : int, optional
-        Marker size, by default 7.
-    mark_stop : bool, optional
-        Add square stopping marker, by default True.
-    """
-
-    # While it would be nice to adapt marker if a panel has shorter x-axis,
-    # that would create confusion in legend (even if duplicate items are included).
-    marker = "o" if len(skill[orient.xaxis]) < 9 else None
-    kws = dict(lw=lw, ms=ms, alpha=alpha, marker=marker)
-
-    def nickname(dim):
-        for key in dim_aliases:
-            if key in dim:
-                idx = dim.index(key)
-                dim = dim[:idx] + dim_aliases[key] + dim[idx + len(key) :]
-        return dim
-
-    fig_registry = []
-    line_registry = {}
-
-    for vFig in projection(skill, orient.fig):
-        fign = f"{fig_title} -- {vFig}"
-        clear_fig(fign, figsize=(8, 4))
-        fig, axs = plt.subplots(
-            num=fign,
-            nrows=len(projection(skill, orient.panel_row)),
-            ncols=len(projection(skill, orient.panel_col)),
-            squeeze=False,
-            sharex=True if sharex == "fig" else sharex,
-            sharey=sharey,
+    def save(self, img_dir, data_dir, tags=tuple(), ext="pdf", yank=False, script=None, seconds=300):
+        """Save `self.fig_registry` to `img_dir`. See `save_all()` for parameter docs."""
+        self.save_all(
+            self.fig_registry,
+            img_dir,
+            data_dir,
+            self.meta,
+            self.orient,
+            self.handles,
+            tags=tags,
+            ext=ext,
+            yank=yank,
+            script=script,
+            seconds=seconds,
         )
-        fig_registry.append(fig)
 
-        for iPanel, uPanel in enumerate(projection(skill, orient.panel_row)):
-            for jPanel, vPanel in enumerate(projection(skill, orient.panel_col)):
-                ax = axs[iPanel, jPanel]
-
-                for iLS, vLS in enumerate(projection(skill, orient.linestyle)):
-                    ls = possible_linestyles[iLS]
-
-                    for vUnlabelled in projection(skill, orient.unlabelled):
-                        # Select cross-section of data to be plotted
-                        xSect = skill.sel(
-                            {
-                                **vFig,
-                                **uPanel,
-                                **vPanel,
-                                **vLS,
-                                **vUnlabelled,
-                            },
-                            drop=True,
-                        )
-                        add_lines(ax, xSect, orient.xaxis, ls, vLS, line_registry, kws, mark_stop)
-
-                # xscale
-                # NOTE: it seems necessary to apply this here (rather than outside this function)
-                # because otherwise the xlim autoscaling (ref rcParam "xmargin") won't propely apply.
-                # NB: it's best not to fiddle with xlim (herein) because arduous to respect `sharex`.
-                if xscale == "log" and ax.get_xlim()[0] <= 0:
-                    print("Warning: xscale is 'log' but ∃ vals<=0. Switching to 'symlog'.")
-                    xscale = "symlog"  # prevents repeat warnings
-                if xscale == "symlog":
-                    ax.set_xscale(xscale, linthresh=1, linscale=0.1)
-                else:
-                    ax.set_xscale(xscale)
-
-                # ylabel
-                if isinstance(skill.name, str) and "(%)" in skill.name:
-                    ax.set_yticks([0, 25, 50, 75, 100])
-                    ax.set_yticklabels([None, 25, 50, 75, 100])
-
-                # grid
-                ax.grid(True, "both", axis="both")
-
-                # Sup-x/y-label padding
-                gs = ax.get_subplotspec()
-                if gs.is_first_col():
-                    ax.set_ylabel(" ")
-                if gs.is_last_row():
-                    ax.set_xlabel(" ")
-
-                # Panel-col/row labels
-                if gs.is_first_row():
-                    set_panel_col_label(ax, vPanel, nickname, gs.is_first_col())
-                if gs.is_last_col():
-                    set_panel_row_label(ax, uPanel, nickname, gs.is_first_row())
-
-        with plt.rc_context({} if axes_labelcolor is None else {"text.color": axes_labelcolor}):
-            fig.supylabel(str(skill.name), x=0.03, y=0.55)
-            fig.supxlabel(nickname(orient.xaxis), y=0.04)
-        fig.tight_layout(h_pad=0.1, w_pad=0.1, pad=1.3 if axs.size > 1 else 3.0)
-
-    # MultiIndex-ed lists of line handles
-    handles = pd.Series(
-        data=list(line_registry.values()),
-        index=pd.MultiIndex.from_tuples(line_registry.keys(), names=list(line_registry)[0]._fields),
-        name="line handles",
-    )
-
-    # Color
-    # Ignore linestyle for the purpose of coloring
-    color_df = handles.unstack(orient.linestyle)
-    if isinstance(color_df, pd.Series):
-        color_df = color_df.to_frame()
-    for i, (_label, lines) in enumerate(color_df.iterrows()):
-        for line in np.ravel(list(lines)):
-            # Must be listed colormap
-            colr = plt.colormaps[cmap](i % plt.colormaps[cmap].N)
-            line.set_color(colr)
-            if sc := getattr(line, "scatter", None):
-                sc.set_facecolor(colr)
-
-    # Legend
-    clear_fig("legend", figsize=(4, 4), frameon=False)
-    fig, ax0 = plt.subplots(num="legend")
-    ax0.axis("off")
-
-    # Easier to work with df than MultiIndex
-    labels = handles.index.to_frame(index=False)
-
-    # Drop unnecessary cols -- unless that would drop *all* of them (e.g. len(handles) <= 1,
-    # where every col is trivially "all same"), in which case keep them all so there's still
-    # something to show in the legend, and `pd.MultiIndex.from_frame` below doesn't choke on
-    # a 0-column frame.
-    not_all_same = labels.nunique().gt(1)
-    if not not_all_same.any():
-        not_all_same[:] = True
-    # Add to meta
-    for col in labels.columns:
-        if not not_all_same[col]:
-            meta[col] = str(labels[col].iloc[0])
-    labels = labels.loc[:, not_all_same]
-    # labels = labels.drop(columns="singleton_hue", errors="ignore")  # rm dummy
-
-    # Each ls only gets labelled once
-    if ls_once and orient.linestyle:
-        vLS0 = projection(skill, orient.linestyle)[0]
-        if vLS0 is not None:
-            # Set non-ls coords to "*" (thus creating duplicate labels) if vLS != vLS[0]
-            once = (labels[list(vLS)] != vLS0).all(axis=1)
-            labels.loc[once, labels.columns.difference(vLS)] = "*"
-
-    # Drop categorical columns (starting with `fix_`)
-    labels = labels.loc[:, ~labels.columns.str.startswith("fix_")]
-    # OR: prettify
-    # labels.columns = [ f"({lbl[4:]})" if lbl.startswith("fix_") else lbl for lbl in labels.columns ]
-    # labels = labels.replace("_VAR_", "")
-
-    # Alias
-    labels = labels.replace(NONE, "N/A")
-    labels = labels.rename(columns=dim_aliases)
-    for dim in aliases:
-        if dim in labels.columns:
-            labels[dim] = labels[dim].replace(aliases[dim])
-
-    # Merge equal rows
-    handles.index = pd.MultiIndex.from_frame(labels)
-    handles = handles.groupby(level=list(range(handles.index.nlevels))[::-1]).sum()
-
-    # Draw legend
-    title, labels, line0s = _legend_parts(handles)
-    legend = ax0.legend(line0s, labels, title=title, **legend_mono)
-
-    # Add meta for *all* data
-    already_labelled = ["fig", "panel_row", "panel_col", "xaxis", "linestyle"]
-    meta = {**{k: [nickname(d) for d in v] for (k, v) in orient.items()}, **meta}
-    meta = {k: v for (k, v) in meta.items() if k not in already_labelled}
-    meta = yaml.dump(meta, indent=4, Dumper=IndentedDumper, sort_keys=False).replace(NONE, "·")
-    meta = meta.rstrip("\n")  # trailing newline
-    # Place text below legend
-    # Ref stackoverflow.com/q/49355810
-    meta = ax0.annotate(
+    @staticmethod
+    def save_all(
+        figures,
+        img_dir,
+        data_dir,
         meta,
-        xy=(0, 0),
-        xytext=(0, 0),
-        xycoords="figure fraction",
-        textcoords=OffsetFrom(legend, (0, -0.1)),
-        horizontalalignment="left",
-        verticalalignment="top",
-        size="x-small",
-    )
-    # Get bbox including both legend and meta
-    bb = Bbox.union([legend.get_window_extent(), meta.get_window_extent()])
-    # bb = bb.transformed(fig.dpi_scale_trans.inverted())
-    handles.total_bbox = bb
+        orient,
+        handles,
+        tags=tuple(),
+        ext="pdf",
+        yank=False,
+        script=None,
+        seconds=300,
+    ):
+        """Save `figures` (e.g. `LinePlots.fig_registry`) to `img_dir`.
 
-    fig_registry.append(fig)
+        Usually called via `save()`, which fills in `figures`/`meta`/`orient`/`handles` from
+        `self`. Kept callable directly too (`LinePlots.save_all(...)`), for saving figures
+        built some other way.
 
-    return fig_registry, handles
+        Parameters
+        ----------
+        figures : list of Figure
+            `LinePlots.fig_registry` (i.e. `.fig_registry` of a `LinePlots` instance).
+        img_dir : Path
+            Directory to save into.
+        data_dir : Path
+            Its `.name` (e.g. a timestamp) is included in the generated filename.
+        meta, orient : dict, Struct
+            Included (stringified) in the generated filename as data-processing info.
+        handles
+            `LinePlots.handles`; `handles.total_bbox` is used as the legend's bbox.
+        tags : tuple, optional
+            Custom tags (e.g. "backup", "dirty") appended to the filename, by default ().
+        ext : str, optional
+            File extension/format passed to `fig.savefig`, by default "pdf".
+        yank : bool or "first", optional
+            Copy the filename(s) to the clipboard, by default False.
+        script : str, optional
+            Passed to `confirm_cold_call` (typically the caller's `__file__`).
+            Prevents a "cold" re-run (e.g. re-opening the script after a long time)
+            from overwriting existing figures unless user confirms, while rapid
+            successive calls (e.g. iterating on plot styling) don't nag on every save.
+            By default `None`, which skips `confirm_cold_call` and always saves.
+        seconds : int, optional
+            Passed to `confirm_cold_call`, by default 300.
+        """
+        for i, fig in enumerate(figures):
+            parts = [
+                data_dir.name,  # timestamp (≈implies git dir and sha)
+                str({**meta, **orient})[1:-1],  # data processing info
+                fig.get_label().split(" -- ")[-1],  # fig title/label
+                *tags,  # "backup", "dirty", ...,  # custom tags
+            ]
+            # Sanitize for file-naming.
+            # Use sub-dirs to limit filename length (constrained on many systems)
+            parts = [
+                part.replace(": ", "=").replace("'", "").replace(",", "").replace("/", "-")
+                for part in parts
+            ]
+            rel_path = Path(*parts[:-1], f"{parts[-1]}.{ext}")
+            name = str(rel_path)
+
+            # Facilitate importing into slides.tex
+            if yank and (yank is True or i == 0):
+                print("* " + name)
+                yanker(name, append=i)  # copy to clipboard
+
+            bbox = "tight"
+            # Keep legend box size constant accross overlays
+            if "legend" == fig.get_label():
+                bbox = handles.total_bbox.transformed(fig.dpi_scale_trans.inverted())
+
+            out_path = img_dir / rel_path
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+
+            @confirm_cold_call(script, seconds)
+            def save_figure():
+                fig.savefig(out_path, bbox_inches=bbox, pad_inches=0.05)
 
 
 def flatten_categorical(df: pd.DataFrame, dim):
     """Undo `find_categorical()`'s split, on an *unstacked* (wide) `df`: broadcast each
     flat/constant line's value -- held in its own, otherwise-empty, `"_CAT_"`-tagged `dim`
     column -- across the regular (numeric) `dim` columns, instead of leaving it stranded in
-    its own extra column. This mirrors `add_lines()`'s flat-line treatment (an `axhline`
+    its own extra column. This mirrors `LinePlots`'s flat-line treatment (an `axhline`
     spanning the whole axis), but in tabular form.
 
     The `"fix_" + dim` row level added by `find_categorical()` is kept -- unlike
-    `line_plots()`'s legend, which drops it (see "Drop categorical columns" therein),
+    `LinePlots`'s legend, which drops it (see "Drop categorical columns" therein),
     relying on the plot itself (an axhline vs. a sloped line) to convey flatness for free.
     A table has no such visual, so the level is kept, collapsed to a boolean flagging
     whether that row/line is flat.
@@ -841,30 +984,30 @@ def flatten_categorical(df: pd.DataFrame, dim):
 
 
 def shape_tables(skill, orient, dim_aliases={}, col_dims=None, find_cat=False):
-    """Print `skill` as a single table, instead of plotting it via `line_plots()`.
+    """Print `skill` as a single table, instead of plotting it via `LinePlots`.
 
     `orient.xaxis` and `col_dims` are unstacked into a (`MultiIndex`'d, if
     `col_dims` is non-empty) column index. The row `MultiIndex` is reordered so
     `orient.fig` is the outermost level(s), followed by `orient.panel_row`, then
     everything else (`linestyle`, `unlabelled`, plus whatever's left over for
-    "hue") -- mirroring `line_plots()`'s figure-then-row nesting.
+    "hue") -- mirroring `LinePlots`'s figure-then-row nesting.
 
     Parameters
     ----------
     skill : xr.DataArray
         Must use sparse underlying data.
     orient : Struct
-        As passed to `line_plots()`.
+        As passed to `LinePlots`.
     dim_aliases : dict, optional
         Nick names for dims, used in the row/column index names.
     col_dims : list, optional
         Extra dims (besides `orient.xaxis`) to unstack into (outer levels of) the
         column `MultiIndex`. By default (`None`), uses `orient.panel_col` --
-        mirroring `line_plots()`'s use of `panel_col` for (visually) side-by-side
+        mirroring `LinePlots`'s use of `panel_col` for (visually) side-by-side
         panels. Pass `[]` for single-level (`xaxis`-only) columns.
     find_cat : bool, optional
         Whether to treat non-numeric `xaxis` ticks (see `find_categorical()`) as
-        flat/constant lines, mirroring `line_plots()`/`add_lines()`: rather than
+        flat/constant lines, mirroring `LinePlots`: rather than
         adding an extra `xaxis` tick/column (NaN for every other line, and NaN
         at every other tick for this one), the value is broadcast across the
         regular (numeric) `xaxis` ticks -- see `flatten_categorical()`. A
@@ -899,79 +1042,3 @@ def shape_tables(skill, orient, dim_aliases={}, col_dims=None, find_cat=False):
     df = df.rename_axis(index=dim_aliases, columns=dim_aliases)
 
     return df
-
-
-def save_all(
-    figures,
-    img_dir,
-    data_dir,
-    meta,
-    orient,
-    handles,
-    tags=tuple(),
-    ext="pdf",
-    yank=False,
-    script=None,
-    seconds=300,
-):
-    """Save `figures` (as returned by `line_plots()`) to `img_dir`.
-
-    Parameters
-    ----------
-    figures : list of Figure
-        `fig_registry`, as returned by `line_plots()`.
-    img_dir : Path
-        Directory to save into.
-    data_dir : Path
-        Its `.name` (e.g. a timestamp) is included in the generated filename.
-    meta, orient : dict, Struct
-        Included (stringified) in the generated filename as data-processing info.
-    handles
-        As returned by `line_plots()`; `handles.total_bbox` is used as the legend's bbox.
-    tags : tuple, optional
-        Custom tags (e.g. "backup", "dirty") appended to the filename, by default ().
-    ext : str, optional
-        File extension/format passed to `fig.savefig`, by default "pdf".
-    yank : bool or "first", optional
-        Copy the filename(s) to the clipboard, by default False.
-    script : str, optional
-        Passed to `confirm_cold_call` (typically the caller's `__file__`).
-        Prevents a "cold" re-run (e.g. re-opening the script after a long time)
-        from overwriting existing figures unless user confirms, while rapid
-        successive calls (e.g. iterating on plot styling) don't nag on every save.
-        By default `None`, which skips `confirm_cold_call` and always saves.
-    seconds : int, optional
-        Passed to `confirm_cold_call`, by default 300.
-    """
-    for i, fig in enumerate(figures):
-        parts = [
-            data_dir.name,  # timestamp (≈implies git dir and sha)
-            str({**meta, **orient})[1:-1],  # data processing info
-            fig.get_label().split(" -- ")[-1],  # fig title/label
-            *tags,  # "backup", "dirty", ...,  # custom tags
-        ]
-        # Sanitize for file-naming.
-        # Use sub-dirs to limit filename length (constrained on many systems)
-        parts = [
-            part.replace(": ", "=").replace("'", "").replace(",", "").replace("/", "-")
-            for part in parts
-        ]
-        rel_path = Path(*parts[:-1], f"{parts[-1]}.{ext}")
-        name = str(rel_path)
-
-        # Facilitate importing into slides.tex
-        if yank and (yank is True or i == 0):
-            print("* " + name)
-            yanker(name, append=i)  # copy to clipboard
-
-        bbox = "tight"
-        # Keep legend box size constant accross overlays
-        if "legend" == fig.get_label():
-            bbox = handles.total_bbox.transformed(fig.dpi_scale_trans.inverted())
-
-        out_path = img_dir / rel_path
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-
-        @confirm_cold_call(script, seconds)
-        def save_figure():
-            fig.savefig(out_path, bbox_inches=bbox, pad_inches=0.05)

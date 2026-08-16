@@ -15,7 +15,7 @@ import pytest
 import xarray as xr
 from IPython.utils.ipstruct import Struct
 
-from mmorpg.xarr_lines import NONE, line_plots, shape_tables
+from mmorpg.xarr_lines import NONE, LinePlots, shape_tables
 
 
 def build_skill(rows, index_names, mean_dims, tuned_dims):
@@ -221,7 +221,7 @@ class TestLinePlotsMatchesShapeTables:
 
     def test_varying_line_matches_table_row(self, skill, orient):
         table = shape_tables(skill, orient, find_cat=True)
-        _figs, handles = line_plots(skill, orient, mark_stop=False)
+        handles = LinePlots(skill, orient, mark_stop=False).handles
 
         for aspect in self.ASPECTS:
             (line,) = handles.loc[(aspect, "varies")]
@@ -236,7 +236,7 @@ class TestLinePlotsMatchesShapeTables:
 
     def test_flat_line_matches_table_row(self, skill, orient):
         table = shape_tables(skill, orient, find_cat=True)
-        _figs, handles = line_plots(skill, orient, mark_stop=False)
+        handles = LinePlots(skill, orient, mark_stop=False).handles
 
         for aspect in self.ASPECTS:
             (line,) = handles.loc[(aspect, "flat")]
