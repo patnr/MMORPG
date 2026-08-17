@@ -45,9 +45,13 @@ def dicts2index(xps) -> pd.Index:
 
     - Drops exact duplicates (which don't make sense, and don't fit with xarray).
     - Gives functions/callables a prettier repr (their `__name__`), column-wise for speed.
-    - The df instantiation detects missing keys (yay!) and converts them and None's to NaNs (nay!),
-      ⇒ {missing keys, None, NaN} are henceforth indistinguishable! But NaNs are generally not supported
-      for _sparse_ xarray coords. Workaround: replace by custom string value.
+    - The df instantiation converts missing keys and `None`s to NaN, which would make
+      {missing key, `None`, NaN} indistinguishable -- except `dispatch()` fills each `xp` with
+      `fun`'s own defaults for any key it omits before ever saving `xps` (see
+      `dispatch._fill_fun_defaults()`), so a *bare* missing key shouldn't reach here in
+      practice. What's still conflated is explicit `None` vs. actual NaN values *within* `xps`:
+      both become NaN, and since NaN isn't supported in _sparse_ xarray coords, both get
+      replaced below by the sentinel string `NONE`.
     """
     df = pd.DataFrame(xps)
 

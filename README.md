@@ -30,6 +30,9 @@ QoL details:
 - Nested multiprocessing in the case of SLURM jobs (speed up by reducing overhead)
 - TODO (clarify): serialization of (`f`) by reference uses less data storage, and...
 - TODO (clarify): Does not impose package structure on your script.
+- TODO (clarify): Careful treatment of crashes and missing parameter combinations
+  so as not to conflate with actual `nan`s. Indeed, a main selling point of MMORPG
+  is its support and efficiency for ragged arrays of input parameters.
 
 ## Motivation
 

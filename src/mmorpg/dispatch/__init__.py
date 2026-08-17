@@ -1,3 +1,4 @@
+import inspect
 import shutil
 import subprocess
 import sys
@@ -8,6 +9,45 @@ from .remote_ops import install_deps, submit_and_monitor_slurm
 from .uplink import Uplink, resolve_host_glob
 
 responsive = {"check": True, "capture_output": True, "text": True}
+
+
+def _fill_fun_defaults(fun, inputs):
+    """Fill each `xp` dict with `fun`'s own default values for keys `xp` omits, so
+    `dicts2index()` (in `results/`) records the value actually used, instead of mislabeling
+    it as missing/`None` just because it wasn't spelled out in `xp`. `inputs` may be ragged
+    (its `xp` dicts need not share the same keys) -- each is bound/defaulted independently.
+
+    Requires `fun` to have an inspectable signature with no `**kwargs` catch-all (else an
+    extra key in `xp` would be ambiguous: a pass-through for `**kwargs`, or a value to
+    default-fill?). If `fun` doesn't meet this, wrap it in one that does, e.g.:
+        def wrapped(x=1, y=2):
+            return fun(x=x, y=y)
+    """
+    try:
+        sig = inspect.signature(fun)
+    except (TypeError, ValueError) as e:
+        raise TypeError(
+            f"Could not inspect signature of {fun!r}. `dispatch()` requires an inspectable "
+            "signature to fill in missing-key defaults. Wrap `fun` in a plain function with "
+            "named parameters (mirroring the ones you rely on) that calls through to it."
+        ) from e
+    if any(p.kind is inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+        raise TypeError(
+            f"{fun!r} accepts **kwargs, which `dispatch()` disallows: an extra key in `xp` "
+            "would be ambiguous (pass-through for `**kwargs`, or a value to default-fill?). "
+            "Wrap `fun` in a plain function with named parameters instead."
+        )
+
+    filled = []
+    for xp in inputs:
+        try:
+            bound = sig.bind_partial(**xp)
+        except TypeError:
+            filled.append(xp)  # leave as-is; `fun(**xp)` will raise (and get logged) downstream
+            continue
+        bound.apply_defaults()
+        filled.append(dict(bound.arguments))
+    return filled
 
 
 def dispatch(
@@ -35,6 +75,17 @@ def dispatch(
         Function to apply to each experiment.
     inputs : list
         Job array, i.e. list of (parameter) dictionaries to pass to `fun`.
+
+        NOTE: clearly, args to `fun` cannot be specified positionally. Benefits:
+        - No order-based unpacking to get wrong,
+        - Downstream code (`results/`) need not know `fun`'s signature,
+        - Irrelevant parameters need not be specified: `dispatch()` fills each `xp` dict with
+          `fun`'s own defaults (via `_fill_fun_defaults()`) before saving, so a key you left
+          out is recorded downstream as whatever default `fun` actually used -- not conflated
+          with an explicit `None`/missing value. `inputs` may be ragged (its `xp` dicts need
+          not share the same keys). Requires `fun` to have an inspectable signature with no
+          `**kwargs` catch-all -- wrap `fun` in a plain function with named parameters if it
+          doesn't (see `_fill_fun_defaults()`).
     host : str, optional
         Remote server, e.g. "cno-006".
         Can also be an `ssh/.config` alias, and supports wildcards, e.g., "my-gcp*".
@@ -128,6 +179,7 @@ def dispatch(
     shutil.copy(Path(__file__).parent / "batch_runner.py", data_dir / script.parent)
 
     # Save inputs -- partitioned for node distribution
+    inputs = _fill_fun_defaults(fun, inputs)
     if host and "hpc.intra.norceresearch" in host:
         if nBatch is None:
             nBatch = 55
