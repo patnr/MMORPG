@@ -57,11 +57,11 @@ if __name__ == "__main__":
     # host = "cno-0001"            # NORCE-DAO workstation
     # host = "login-1.hpc.intra.norceresearch.no" # NORCE HPC
     data_dir = dispatch(experiment, inputs, host)
-    outputs = load_data(data_dir / "outputs")
+    xps, outputs = load_data(data_dir)
 
     # Print table of results
     import pandas as pd
 
-    df = pd.DataFrame(inputs).set_index(list(inputs[0]))
+    df = pd.DataFrame(xps).set_index(list(xps[0]))
     df = pd.DataFrame.from_records(outputs, index=df.index)
     print(df)

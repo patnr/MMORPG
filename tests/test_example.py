@@ -190,7 +190,7 @@ class TestIntegration:
                 )
 
                 # Load results
-                results = load_data(data_dir / "outputs", pbar=False)
+                _, results = load_data(data_dir, pbar=False)
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
             # Host is unreachable - skip test with warning
             msg = f"Host '{host}' unreachable: {type(e).__name__}"

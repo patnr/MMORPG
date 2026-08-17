@@ -1,8 +1,20 @@
 """Tests for data saving and loading functionality."""
 
+import dill
 import numpy as np
 
 import mmorpg
+
+
+def _load_dir(pth):
+    """Read+flatten raw batch files directly, bypassing `load_data()` (which now reconciles
+    `inputs/` against `outputs/`) -- these tests only care about `save()`'s round-trip
+    fidelity for a single directory."""
+    files = sorted(pth.iterdir(), key=lambda p: int(p.name))
+    data = []
+    for f in files:
+        data.extend(dill.loads(f.read_bytes()))
+    return data
 
 
 def test_save_and_load_basic(tmp_path):
@@ -12,7 +24,7 @@ def test_save_and_load_basic(tmp_path):
     (data_dir / "inputs").mkdir(parents=True)
 
     mmorpg.save(inputs, data_dir, nBatch=3)
-    loaded = mmorpg.load_data(data_dir / "inputs", pbar=False)
+    loaded = _load_dir(data_dir / "inputs")
 
     assert loaded == inputs
     assert len(loaded) == 10
@@ -32,7 +44,7 @@ def test_save_creates_batches(tmp_path):
     assert len(batch_files) == nBatch
 
     # Check that all data is preserved
-    loaded = mmorpg.load_data(data_dir / "inputs", pbar=False)
+    loaded = _load_dir(data_dir / "inputs")
     assert len(loaded) == 100
 
 
@@ -43,7 +55,7 @@ def test_save_single_batch(tmp_path):
     (data_dir / "inputs").mkdir(parents=True)
 
     mmorpg.save(inputs, data_dir, nBatch=1)
-    loaded = mmorpg.load_data(data_dir / "inputs", pbar=False)
+    loaded = _load_dir(data_dir / "inputs")
 
     assert loaded == inputs
 
@@ -58,7 +70,7 @@ def test_load_preserves_numpy_arrays(tmp_path):
     (data_dir / "inputs").mkdir(parents=True)
 
     mmorpg.save(inputs, data_dir, nBatch=1)
-    loaded = mmorpg.load_data(data_dir / "inputs", pbar=False)
+    loaded = _load_dir(data_dir / "inputs")
 
     assert len(loaded) == 2
     np.testing.assert_array_equal(loaded[0]["data"], np.array([1, 2, 3]))
@@ -80,7 +92,7 @@ def test_load_preserves_complex_types(tmp_path):
     (data_dir / "inputs").mkdir(parents=True)
 
     mmorpg.save(inputs, data_dir, nBatch=1)
-    loaded = mmorpg.load_data(data_dir / "inputs", pbar=False)
+    loaded = _load_dir(data_dir / "inputs")
 
     assert loaded[0]["nested"] == {"a": [1, 2], "b": {"c": 3}}
     np.testing.assert_array_equal(loaded[0]["array"], np.array([1.5, 2.5]))
@@ -90,21 +102,20 @@ def test_load_preserves_complex_types(tmp_path):
 
 def test_load_sorts_by_batch_number(tmp_path):
     """Test that load_data sorts batches numerically (not lexicographically)"""
-    data_dir = tmp_path / "test_data" / "inputs"
-    data_dir.mkdir(parents=True)
+    data_dir = tmp_path / "test_data"
+    (data_dir / "inputs").mkdir(parents=True)
+    (data_dir / "outputs").mkdir()
 
     # Create batches in non-sequential order
-    import dill
+    for i in [0, 10, 2, 1]:
+        (data_dir / "inputs" / str(i)).write_bytes(dill.dumps([{"batch": i, "i": i}]))
+        (data_dir / "outputs" / str(i)).write_bytes(dill.dumps([None]))
 
-    (data_dir / "0").write_bytes(dill.dumps([{"batch": 0, "i": 0}]))
-    (data_dir / "10").write_bytes(dill.dumps([{"batch": 10, "i": 10}]))
-    (data_dir / "2").write_bytes(dill.dumps([{"batch": 2, "i": 2}]))
-    (data_dir / "1").write_bytes(dill.dumps([{"batch": 1, "i": 1}]))
-
-    loaded = mmorpg.load_data(data_dir, pbar=False)
+    xps, res = mmorpg.load_data(data_dir, pbar=False)
 
     # Should be sorted: 0, 1, 2, 10 (not 0, 1, 10, 2)
-    assert [x["batch"] for x in loaded] == [0, 1, 2, 10]
+    assert [x["batch"] for x in xps] == [0, 1, 2, 10]
+    assert len(res) == 4
 
 
 def test_save_with_uneven_batches(tmp_path):
@@ -115,27 +126,29 @@ def test_save_with_uneven_batches(tmp_path):
 
     # 10 items divided into 3 batches: should be [4, 4, 2]
     mmorpg.save(inputs, data_dir, nBatch=3)
-    loaded = mmorpg.load_data(data_dir / "inputs", pbar=False)
+    loaded = _load_dir(data_dir / "inputs")
 
     assert loaded == inputs
     assert len(loaded) == 10
 
 
-def test_load_data_with_progress_bar(tmp_path):
-    """Test that progress bar parameter works"""
+def test_load_data_matches_inputs_with_outputs(tmp_path):
+    """Test that load_data() pairs xps/res from inputs/ and outputs/, honoring pbar."""
     inputs = [{"i": i} for i in range(5)]
     data_dir = tmp_path / "test_data"
     (data_dir / "inputs").mkdir(parents=True)
-
-    mmorpg.save(inputs, data_dir, nBatch=2)
+    (data_dir / "outputs").mkdir()
+    (data_dir / "inputs" / "0").write_bytes(dill.dumps(inputs))
+    (data_dir / "outputs" / "0").write_bytes(dill.dumps([None] * 5))
 
     # Should work with pbar=True (default)
-    loaded1 = mmorpg.load_data(data_dir / "inputs", pbar=True)
-    assert loaded1 == inputs
+    xps1, res1 = mmorpg.load_data(data_dir, pbar=True)
+    assert xps1 == inputs
+    assert res1 == [None] * 5
 
     # Should work with pbar=False
-    loaded2 = mmorpg.load_data(data_dir / "inputs", pbar=False)
-    assert loaded2 == inputs
+    xps2, res2 = mmorpg.load_data(data_dir, pbar=False)
+    assert xps2 == inputs
 
 
 def test_save_preserves_order(tmp_path):
@@ -145,7 +158,7 @@ def test_save_preserves_order(tmp_path):
     (data_dir / "inputs").mkdir(parents=True)
 
     mmorpg.save(inputs, data_dir, nBatch=7)
-    loaded = mmorpg.load_data(data_dir / "inputs", pbar=False)
+    loaded = _load_dir(data_dir / "inputs")
 
     assert loaded == inputs
     assert [x["id"] for x in loaded] == [f"exp_{i:03d}" for i in range(50)]

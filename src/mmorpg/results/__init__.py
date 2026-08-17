@@ -40,7 +40,7 @@ NONE = "NA"
 
 
 def dicts2index(xps) -> pd.Index:
-    """Convert a list of experiment-input dicts (e.g. `load_data(data_dir / "inputs")`) into
+    """Convert a list of experiment-input dicts (e.g. `xps` from `load_data(data_dir)`) into
     the `pd.MultiIndex` of a to-be-populated results table/`DataArray`.
 
     - Drops exact duplicates (which don't make sense, and don't fit with xarray).

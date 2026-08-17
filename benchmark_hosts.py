@@ -47,8 +47,8 @@ if __name__ == "__main__":
     # host = "login-1.hpc.intra.norceresearch.no"
 
     dir = dispatch(experiment, inputs, host)
-    outputs = load_data(dir / "outputs")
+    xps, outputs = load_data(dir)
 
-    df = pd.concat([pd.DataFrame(inputs),
+    df = pd.concat([pd.DataFrame(xps),
                     pd.DataFrame.from_records(outputs)], axis=1)  # fmt:skip
     print(df)
