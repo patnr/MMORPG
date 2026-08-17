@@ -21,8 +21,10 @@ __all__ = [
     "dicts2index",
     "enum_explode",
     "find_categorical",
+    "find_crashed",
     "flatten_categorical",
     "get_data_dir",
+    "is_crashed",
     "load_data",
     "pd_sel",
     "projection",
@@ -67,6 +69,30 @@ def dicts2index(xps) -> pd.Index:
     df = df.fillna(NONE)
     df = df.set_index(df.columns.tolist())
     return df.index
+
+
+def is_crashed(r) -> bool:
+    """Whether `r` (a single entry of `res`, e.g. from `load_data(data_dir)`) is a crashed
+    result: the `(exception, traceback_str)` tuple that `local_mp.mp(..., log_errors=True)`
+    substitutes for a per-item exception, instead of raising and killing the whole batch.
+    """
+    return isinstance(r, tuple) and len(r) == 2 and isinstance(r[0], Exception) and isinstance(r[1], str)
+
+
+def find_crashed(res, warn=True) -> np.ndarray:
+    """Boolean mask over `res` (e.g. from `load_data(data_dir)`) flagging crashed entries --
+    see `is_crashed()`. Downstream code otherwise has to hand-roll this same check per script,
+    which tends to fold a *crash* into the same NaN as a legitimately bad result, discarding
+    the crash count/type in the process. `warn` surfaces both instead, e.g.:
+
+        crashed = find_crashed(res)
+        stats = [nan_stats if c else result2stats(r) for c, r in zip(crashed, res)]
+    """
+    crashed = np.fromiter((is_crashed(r) for r in res), dtype=bool, count=len(res))
+    if warn and crashed.any():
+        kinds = pd.Series([type(res[i][0]).__name__ for i in np.flatnonzero(crashed)])
+        warnings.warn(f"{crashed.sum()}/{len(res)} results crashed: {kinds.value_counts().to_dict()}")
+    return crashed
 
 
 def enum_explode(s: pd.Series, idx_name):
