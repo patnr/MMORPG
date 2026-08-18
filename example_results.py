@@ -1,19 +1,35 @@
-"""Post-process and plot the results of `example.py`.
+"""Companion to `example.py`: demo `mmorpg.results/` for post-process and plotting.
 
-Companion to `example.py`: demonstrates the (independent) `mmorpg.results`/
-`mmorpg.results.lineplots` layer -- tabulating and plotting a sparse, possibly *ragged*
-parameter grid -- on the same `experiment()`. Only needs the `results` extra
-(`uv sync --extra results`); unlike `example.py`, it never touches `mmorpg`'s
-dispatch/remote-execution machinery.
+The benefit of splitting into  `example.py` and `example_results.py`
+is that the latter is usually much quicker and we'll want to re-run it
+often as part of adjustments to the post-processing and plotting.
 
-Run `python example.py` first (takes a couple seconds locally), then this script.
-
-`example.py`'s own grid is deliberately ragged: `"deterministic"` doesn't depend on `seed` or
-`antithetic` (6 points total, one per `N`/`func`), while `"stochastic"` is repeated over 1000
-seeds per (`N`, `func`, `antithetic`) -- exactly the kind of irregularly-shaped grid
-`mmorpg.results` is built to handle without densifying/padding. It also includes one
-deliberately-invalid `"unsupported"` method entry, to exercise `find_crashed()`.
+`example.py`'s own grid is deliberately ragged: `"deterministic"` doesn't depend on `seed`,
+`antithetic`, or `bias` (27 points total, one per `N`/`func`/`nDim`), while `"stochastic"` is
+repeated over 10 seeds per (`N`, `func`, `antithetic`, `bias`, `nDim`) -- exactly the kind of
+irregularly-shaped grid `mmorpg.results` is built to handle without densifying/padding. It also
+includes one deliberately-invalid `"unsupported"` method entry, to exercise `find_crashed()`.
 """
+
+# Debugging guide
+# - First make sure the (weirdness of the) results are not due to some strange choice
+#   in the aggregations in Results.py. I.e. in the mean() and min() operations.
+#   Example questions:
+#   - Are you setting skipna appropriately (`False` for mean, `True` for tuned) ?
+#   - Are you optimising on the last iteration (good),
+#     or for each individual iteration (bad) ?
+#   - Have you exploded the `iter` dimension correctly?
+#     Did you `fillna(last_or_lowest_value)` after the stopping iteration?
+#   - If larger ⇔ better for skill, then did you do max() rather than min() ?
+# - Drill down to particular data points (sub-selection) of interest,
+#   - Empty `orient.mean` and `.tuned`.
+#   - Inspect the raw values. For example,
+#       >>> xp = dict(nEns=30, case="quadratic", nDim=2, method="GD", aspect=1)
+#       ... print(sparse_to_series(xa.sel(xp, drop=True)).unstack("iter"))
+#     Keep adding kws to `xp` until you get just the sub-selection you want.
+# - Use that xp here.
+# - Check that `objs` values match those from results processing script.
+# - Run script in debug mode. I.e. do `breakpoint(); m.experiment(**xp)`
 
 import sys
 from pathlib import Path
@@ -33,6 +49,7 @@ from mmorpg.results import (
     pd_sel,
     projection,
     shape_tables,
+    sparse_to_series,
     validate,
 )
 from mmorpg.results.lineplots import LinePlots
@@ -71,14 +88,16 @@ xa.name = "Error"
 # `orient` maps plot/processing roles to data dims.
 orient = Struct(
     mean=["seed"],  # average away the (ragged) `seed` dim
-    tuned=["antithetic"],  # pick whichever setting has lower error (see `.min()` below)
-    fig=["func"],  # separate figure per integrand
-    panel_row=[],
-    panel_col=[],
-    linestyle=[],  # one line per method
+    tuned=["antithetic", "bias"],  # grid-search over both & pick the lower-error combo (`.min()`)
+    fig=[],
+    panel_row=["func"],
+    panel_col=["nDim"],  # one panel per dimensionality of the integration domain
+    linestyle=[],
     unlabelled=[],
     xaxis="N",
 )
+# `method` and `func` are left unassigned -- both become "hue": each (method, func) combo gets
+# its own colored line, overlaid within each `nDim` panel.
 validate(orient, xa.dims)
 
 # `skipna=True` -- unlike a dense grid (where `False` would flag a genuine hole): here,
@@ -109,29 +128,46 @@ for fig in plotter.fig_registry:
 
 # Reference lines for each method's theoretical convergence rate, anchored to match its
 # empirical curve at the smallest `N` -- so the slope can be eyeballed directly. Note this is
-# only an *asymptotic* rate: e.g. for `func="oscillatory"` (a smooth periodic function
+# only an *asymptotic* rate (unaffected by `nDim`, since each `func` is separable -- see
+# `experiment()`'s docstring): e.g. for `func="oscillatory"` (a smooth periodic function
 # sampled over whole periods, endpoints included), the trapezoid rule is spectrally accurate
 # -- it converges far faster than the generic `N^-2`, so don't expect a match there.
 rates = {
     "stochastic": (0.5, "$N^{-1/2}$"),  # Monte Carlo: error ~ std/sqrt(N)
     "deterministic": (2, "$N^{-2}$"),  # trapezoid rule (generic smooth case): error ~ O(h^2)
 }
-# `projection()` reproduces the same (fig-dim -> value) order `LinePlots` iterated internally.
-figs_by_func = zip(plotter.fig_registry[:-1], projection(skill, orient.fig))  # skip legend fig
-for fig, vFig in figs_by_func:
-    for ax in fig.axes:
-        for method, (p, label) in rates.items():
-            series = table.loc[(vFig["func"], method)].sort_index()
-            xticks = series.index.to_numpy(dtype=float)
-            ref_ys = series.iloc[0] * (xticks[0] / xticks) ** p
-            ax.plot(xticks, ref_ys, ls=":", color="k", lw=1.5)
-            ax.annotate(
-                label,
-                (xticks[-1], ref_ys[-1]),
-                xytext=(4, 0),
-                textcoords="offset points",
-                va="center",
-            )
+# Anchor each reference line to the "quadratic" func line -- one dotted line/label per method
+# per panel, rather than one per (method, func) combo (which would just overplot near-identical
+# slopes at slightly different heights). Only matters when `func` is left as "hue" (i.e. not
+# `fig`/`panel_row`/`panel_col`), in which case multiple funcs are overlaid per panel; if `func`
+# *is* one of those roles, `combo` below already pins it and this is unused.
+ANCHOR_FUNC = "quadratic"
+
+# Look up each reference line's data straight from `skill` (keyed by dimension name) rather than
+# from `table` (keyed by `orient`-dependent row/column position) -- this way the loop doesn't
+# care which of `fig`/`panel_row`/`panel_col`/hue `func` (or any other dim) has been placed in.
+ncols = len(projection(skill, orient.panel_col))
+figs_by_vFig = zip(plotter.fig_registry[:-1], projection(skill, orient.fig))  # skip legend fig
+for fig, vFig in figs_by_vFig:
+    for iRow, uPanel in enumerate(projection(skill, orient.panel_row)):
+        for jCol, vPanel in enumerate(projection(skill, orient.panel_col)):
+            ax = fig.axes[iRow * ncols + jCol]
+            combo = {**vFig, **uPanel, **vPanel}
+            func = combo.get("func", ANCHOR_FUNC)
+            for method, (p, label) in rates.items():
+                xSect = skill.sel({**combo, "func": func, "method": method}, drop=True)
+                series = sparse_to_series(xSect).sort_index()
+                # `sparse_to_series()` always returns a (here single-level) `MultiIndex`.
+                xticks = series.index.get_level_values(orient.xaxis).to_numpy(dtype=float)
+                ref_ys = series.iloc[0] * (xticks[0] / xticks) ** p
+                ax.plot(xticks, ref_ys, ls=":", color="k", lw=1.5)
+                ax.annotate(
+                    label,
+                    (xticks[-1], ref_ys[-1]),
+                    xytext=(4, 0),
+                    textcoords="offset points",
+                    va="center",
+                )
 
 img_dir = data_dir / "figures"
 # plotter.save(img_dir=img_dir, data_dir=data_dir)

@@ -85,17 +85,19 @@ class TestListExperiments:
     def test_experiment_count(self):
         """Test that correct number of experiments is generated."""
         inputs = list_experiments()
-        # 2 methods * 2 funcs * 3 N values * 1000 seeds * 2 antithetic settings, minus
-        # deterministic duplicates (deterministic ignores seed/antithetic -> 2*3 = 6 configs,
-        # one per func/N), plus the one deliberately-invalid "unsupported" demo entry.
-        assert len(inputs) == 2 * 3 + 2 * 3 * 1000 * 2 + 1
+        # stochastic: 3 funcs * 3 N values * 10 seeds * 2 antithetic settings * 3 bias values
+        # * 3 nDim values, all distinct; deterministic: only 3 funcs * 3 N values * 3 nDim
+        # values are distinct (seed/antithetic/bias are forced to None, collapsing the rest of
+        # the grid into duplicates that get deduped away); plus the one deliberately-invalid
+        # "unsupported" demo entry.
+        assert len(inputs) == 3 * 3 * 3 + 3 * 3 * 10 * 2 * 3 * 3 + 1
 
     def test_seed_handling_deterministic(self):
         """Test deterministic experiments have seed=None."""
         inputs = list_experiments()
         deterministic = [x for x in inputs if x["method"] == "deterministic"]
 
-        assert len(deterministic) == 2 * 3  # 2 funcs * 3 N values
+        assert len(deterministic) == 3 * 3 * 3  # 3 funcs * 3 N values * 3 nDim values
         assert all(x["seed"] is None for x in deterministic)
 
     def test_no_duplicates(self):
@@ -118,7 +120,7 @@ class TestListExperiments:
         "unsupported" method demo entry only specifies a minimal subset, to exercise crash
         handling (see `find_crashed()`/`example_results.py`)."""
         inputs = list_experiments()
-        full_keys = {"method", "N", "seed", "func", "antithetic"}
+        full_keys = {"method", "N", "seed", "func", "antithetic", "bias", "nDim"}
 
         for dct in inputs:
             assert set(dct.keys()) <= full_keys
