@@ -13,7 +13,8 @@ data_dir = dispatch(f, params, host) # instead of:
 
 MMORPG also helps in the post-processing, analysis and presentation
 of high-dimensional parameter and results arrays,
-including its tabulation/plotting, despite them being irregularly shaped or missing values.
+including its tabulation/plotting, despite parameter arrays/grids
+being irregularly shaped (ragged) or missing values.
 
 It leverages battle-tested libraries:
 `ssh/rsync` for remote execution,
@@ -24,15 +25,13 @@ and `sparse` `xarray` for post-processing.
 QoL details:
 
 - SSH multiplexing to limit connection overhead
-- Progress bars everywhere
+- Progress bars everywhere (unless opt-out)
 - Error logging, not raising
 - `threadpoolctl.threadpool_limits(1)`
 - Nested multiprocessing in the case of SLURM jobs (speed up by reducing overhead)
-- TODO (clarify): serialization of (`f`) by reference uses less data storage, and...
-- TODO (clarify): Does not impose package structure on your script.
-- TODO (clarify): Careful treatment of crashes and missing parameter combinations
-  so as not to conflate with actual `nan`s. Indeed, a main selling point of MMORPG
-  is its support and efficiency for ragged arrays of input parameters.
+- Main function/experiment referenced by name, not pickled, avoiding bloat and pickling failures.
+- Runs your script standalone (no `-m`), so it need not be part of an importable package
+- Crashes are captured and distinct from legitimate `nan` results.
 
 ## Motivation
 
