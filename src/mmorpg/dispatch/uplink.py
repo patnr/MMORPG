@@ -40,9 +40,10 @@ def resolve_host_glob(host: str) -> str:
 class Uplink:
     """Multiplexed connection to `host` via ssh."""
 
-    def __init__(self, host, progbar=True, dry=False, use_M=True):
+    def __init__(self, host, progbar=True, verbose=True, dry=False, use_M=True):
         self.host = host
         self.progbar = progbar
+        self.verbose = verbose
         self.dry = dry
         self.use_M = use_M
 
@@ -61,7 +62,10 @@ class Uplink:
         )
 
     def __repr__(self):
-        return f"Uplink(host='{self.host}', progbar={self.progbar}, dry={self.dry}, use_M={self.use_M})"
+        return (
+            f"Uplink(host='{self.host}', progbar={self.progbar}, verbose={self.verbose}, "
+            f"dry={self.dry}, use_M={self.use_M})"
+        )
 
     def check_reachable(self, timeout: int = 5) -> tuple[bool, str | None]:
         """Check if host is reachable via SSH.
@@ -169,7 +173,8 @@ class Uplink:
     def sym_sync(self, source_dir: Path, target_dir: Path | str):
         """Upload `source_dir` to `target_dir` on host. Download upon exit/exception."""
         # Sync source -> target
-        print(f"Sending {source_dir}")
+        if self.verbose:
+            print(f"Sending {source_dir}")
         self.cmd(f"mkdir -p {target_dir}")
         self.rsync(f"{source_dir}/", target_dir)
 

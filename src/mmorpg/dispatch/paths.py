@@ -72,8 +72,9 @@ def load_data(data_dir, pbar=True):
     return xps, res
 
 
-def save(inputs, data_dir, nBatch):
-    print(f"Saving {len(inputs)} inputs to", data_dir)
+def save(inputs, data_dir, nBatch, pbar=True, verbose=True):
+    if verbose:
+        print(f"Saving {len(inputs)} inputs to", data_dir)
     ceil_division = lambda a, b: (a + b - 1) // b  # noqa: E731
     batch_size = ceil_division(len(inputs), nBatch)
     nBatch = ceil_division(len(inputs), batch_size)
@@ -85,7 +86,8 @@ def save(inputs, data_dir, nBatch):
     # saving can be slow ⇒ mp
     # from .local_mp import mp
     # mp(save_batch, range(nBatch))
-    for i in tqdm(list(range(nBatch))):
+    bar = tqdm if pbar else (lambda x: x)
+    for i in bar(list(range(nBatch))):
         save_batch(i)
 
 

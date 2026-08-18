@@ -8,7 +8,7 @@ import threadpoolctl
 threadpoolctl.threadpool_limits(1)  # make np use only 1 core
 
 
-def mp(f, lst, nCPU=None, log_errors=False):
+def mp(f, lst, nCPU=None, log_errors=False, pbar=True):
     """Multiprocessing map with progress bar."""
     from mmorpg import progbar
 
@@ -34,4 +34,5 @@ def mp(f, lst, nCPU=None, log_errors=False):
         D = 1 + len(lst) // nCPU // 10  # heuristic chunksize
         with MP.ProcessPool(nCPU) as pool:
             jobs = pool.imap(f, lst, chunksize=D)
-    return list(progbar(jobs, total=len(lst)))
+    bar = progbar if pbar else (lambda x, **_: x)
+    return list(bar(jobs, total=len(lst)))

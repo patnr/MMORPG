@@ -63,6 +63,8 @@ def dispatch(
     slurm_kws: dict = None,
     setup: list[str] | str = "uv",
     venv: str = None,
+    progbar: bool = True,
+    verbose: bool = True,
 ):
     """
     Execute function over parameter sets on remote hosts/clusters (or locally).
@@ -145,6 +147,13 @@ def dispatch(
         (rather than `{proj_dir}/.venv` or a hash location as used by poetry)
         which avoids re-creating the venv for every upload.
         Use {proj_name} and {venv} placeholders in setup.
+    progbar : bool, optional
+        Whether to show progress bars (saving inputs, running `fun` over `inputs`, and
+        rsync's own transfer progress). Does not affect SLURM job-queue progress, which
+        `submit_and_monitor_slurm()` always shows. Default `True`.
+    verbose : bool, optional
+        Whether to print informational messages (e.g. "Saving N inputs to...", "Sending...").
+        Error output is always printed regardless of this flag. Default `True`.
 
     Returns
     -------
@@ -188,10 +197,10 @@ def dispatch(
             nCPU = 64
     elif nBatch is None:
         nBatch = 1
-    save(inputs, data_dir, nBatch)
+    save(inputs, data_dir, nBatch, pbar=progbar, verbose=verbose)
 
     def concat_cmd(python, scrpt):
-        args = [python, scrpt.parent / "batch_runner.py", scrpt.stem, fun.__name__, nCPU]
+        args = [python, scrpt.parent / "batch_runner.py", scrpt.stem, fun.__name__, progbar, nCPU]
         args = [str(x) for x in args]
         return args
 
@@ -210,7 +219,7 @@ def dispatch(
         # Connect
         if host.endswith("*"):
             host = resolve_host_glob(host)
-        remote = Uplink(host)
+        remote = Uplink(host, progbar=progbar, verbose=verbose)
 
         # Get remote_dir
         if data_root_on_remote is None:

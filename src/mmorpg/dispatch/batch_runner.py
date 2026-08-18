@@ -28,11 +28,13 @@ if __name__ == "__main__":
         _,  # name of this script
         script,  # e.g. "my_experiments"
         fun_name,  # e.g. "experiment"
+        pbar,  # whether to show a progress bar
         nCPU,  # number of kws to run simultaneously
         inpt,  # e.g. "my_experiments/inputs/0"
     ) = sys.argv
 
     # Process args
+    pbar = pbar == "True"
     nCPU = None if nCPU == "None" else int(nCPU)
 
     # Import fun
@@ -44,7 +46,7 @@ if __name__ == "__main__":
     inputs = dill.loads(inpt.read_bytes())
 
     # results = [fun(**kws) for kws in inputs]  # -- for debugging --
-    results = mp(lambda kws: fun(**kws), inputs, nCPU, log_errors=True)
+    results = mp(lambda kws: fun(**kws), inputs, nCPU, log_errors=True, pbar=pbar)
 
     outp = Path(str(inpt).replace("/inputs/", "/outputs/"))
     outp.write_bytes(dill.dumps(results))
