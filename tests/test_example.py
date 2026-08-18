@@ -85,17 +85,17 @@ class TestListExperiments:
     def test_experiment_count(self):
         """Test that correct number of experiments is generated."""
         inputs = list_experiments()
-        # 2 methods * 3 N values * 100000 seeds, minus deterministic duplicates
-        # deterministic gets 3 configs (one per N, all with seed=None)
-        # stochastic gets 3*100000 configs
-        assert len(inputs) == 3 + 3 * 100000
+        # 2 methods * 2 funcs * 3 N values * 1000 seeds * 2 antithetic settings, minus
+        # deterministic duplicates (deterministic ignores seed/antithetic -> 2*3 = 6 configs,
+        # one per func/N), plus the one deliberately-invalid "unsupported" demo entry.
+        assert len(inputs) == 2 * 3 + 2 * 3 * 1000 * 2 + 1
 
     def test_seed_handling_deterministic(self):
         """Test deterministic experiments have seed=None."""
         inputs = list_experiments()
         deterministic = [x for x in inputs if x["method"] == "deterministic"]
 
-        assert len(deterministic) == 3
+        assert len(deterministic) == 2 * 3  # 2 funcs * 3 N values
         assert all(x["seed"] is None for x in deterministic)
 
     def test_no_duplicates(self):
@@ -114,12 +114,16 @@ class TestListExperiments:
             assert "error" in result
 
     def test_experiment_keys(self):
-        """Test that all experiments have required keys."""
+        """Test that experiments have the expected keys -- ragged: the deliberately-invalid
+        "unsupported" method demo entry only specifies a minimal subset, to exercise crash
+        handling (see `find_crashed()`/`example_results.py`)."""
         inputs = list_experiments()
-        required_keys = {"method", "N", "seed"}
+        full_keys = {"method", "N", "seed", "func", "antithetic"}
 
         for dct in inputs:
-            assert set(dct.keys()) == required_keys
+            assert set(dct.keys()) <= full_keys
+        real = [x for x in inputs if x["method"] != "unsupported"]
+        assert all(set(dct.keys()) == full_keys for dct in real)
 
 
 class TestIntegration:

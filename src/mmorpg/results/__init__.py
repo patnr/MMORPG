@@ -76,7 +76,12 @@ def is_crashed(r) -> bool:
     result: the `(exception, traceback_str)` tuple that `local_mp.mp(..., log_errors=True)`
     substitutes for a per-item exception, instead of raising and killing the whole batch.
     """
-    return isinstance(r, tuple) and len(r) == 2 and isinstance(r[0], Exception) and isinstance(r[1], str)
+    return (
+        isinstance(r, tuple)
+        and len(r) == 2
+        and isinstance(r[0], Exception)
+        and isinstance(r[1], str)
+    )
 
 
 def find_crashed(res, warn=True) -> np.ndarray:
@@ -91,7 +96,9 @@ def find_crashed(res, warn=True) -> np.ndarray:
     crashed = np.fromiter((is_crashed(r) for r in res), dtype=bool, count=len(res))
     if warn and crashed.any():
         kinds = pd.Series([type(res[i][0]).__name__ for i in np.flatnonzero(crashed)])
-        warnings.warn(f"{crashed.sum()}/{len(res)} results crashed: {kinds.value_counts().to_dict()}")
+        warnings.warn(
+            f"{crashed.sum()}/{len(res)} results crashed: {kinds.value_counts().to_dict()}"
+        )
     return crashed
 
 
@@ -183,6 +190,7 @@ def scale01(x: xr.DataArray, groupby: list, xaxis: str, min_like="min"):
     if (a == b).all():
         print("Warning: all values are equal. Normalization will result in NaNs.")
     return skill
+
 
 def sparse_to_series(a):
     """Convert *sparse* `DataArray` to a `pd.Series`."""
@@ -331,11 +339,12 @@ def shape_tables(skill, orient, dim_aliases={}, col_dims=None, find_cat=False):
     if find_cat:
         df = flatten_categorical(df, orient.xaxis)
 
-    fix_dim = "fix_" + orient.xaxis
-    etc_dims = [d for d in df.index.names if d not in row_dims and d != fix_dim]
-    if fix_dim in df.index.names:
-        etc_dims.append(fix_dim)
-    df = df.reorder_levels([*row_dims, *etc_dims], axis=0)
+    if df.index.nlevels > 1:
+        fix_dim = "fix_" + orient.xaxis
+        etc_dims = [d for d in df.index.names if d not in row_dims and d != fix_dim]
+        if fix_dim in df.index.names:
+            etc_dims.append(fix_dim)
+        df = df.reorder_levels([*row_dims, *etc_dims], axis=0)
     df = df.sort_index(axis=0).sort_index(axis=1)
     df = df.rename_axis(index=dim_aliases, columns=dim_aliases)
 
