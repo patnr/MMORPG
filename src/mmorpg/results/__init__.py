@@ -197,6 +197,7 @@ def sparse_to_series(a):
     # Enables round-tripping with xr.DataArray.from_series(., sparse=True).
     # From pending/stale PR #4007.
     # PS: cannot simply use a.coords.to_index() coz yields non-sparse coords
+    # TODO: remove once https://github.com/pydata/xarray/pull/11528 is upstream?
     index = pd.MultiIndex.from_arrays(a.data.coords, names=list(a.coords))
     index = index.set_levels(
         [
@@ -204,7 +205,7 @@ def sparse_to_series(a):
             for (labels, ints) in zip(a.coords.values(), index.levels)
         ]
     )
-    return pd.Series(a.data.data, index=index, name=a.name)
+    return pd.Series(a.data.data, index=index, name=a.name) 
 
 
 def projection(a, dims, sparse=True, dicts=True):
