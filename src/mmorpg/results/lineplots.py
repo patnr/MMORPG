@@ -40,13 +40,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 import yaml
-from IPython.utils.ipstruct import Struct  # One of many "Bunch" variants
 from matplotlib.text import OffsetFrom
 from matplotlib.ticker import ScalarFormatter, SymmetricalLogLocator
 from matplotlib.transforms import Bbox
 from pandas import pandas as pd
 
-from . import NONE, find_categorical, projection, sparse_to_series
+from . import NONE, DotDict, find_categorical, projection, sparse_to_series
 
 # Running in iPython?
 ip = __import__("IPython").get_ipython() if "IPython" in sys.modules else None
@@ -215,7 +214,7 @@ class LinePlots:
     ----------
     skill : xr.DataArray
         Must use sparse underlying data.
-    orient : Struct
+    orient : DotDict
         Dict mapping dims of plots to list of dims of `skill`.
     meta : dict, optional
         Additional info to list in legend, by default {}.
@@ -277,7 +276,7 @@ class LinePlots:
     def __init__(
         self,
         skill: xr.DataArray,
-        orient: Struct,
+        orient: DotDict,
         meta={},
         dim_aliases={},
         aliases={},
@@ -840,7 +839,7 @@ class LinePlots:
             Directory to save into.
         data_dir : Path
             Its `.name` (e.g. a timestamp) is included in the generated filename.
-        meta, orient : dict, Struct
+        meta, orient : dict, DotDict
             Included (stringified) in the generated filename as data-processing info.
         handles
             `LinePlots.handles`; `handles.total_bbox` is used as the legend's bbox.

@@ -38,10 +38,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
-from IPython.utils.ipstruct import Struct  # One of many "Bunch" variants
 
 from example import experiment
 from mmorpg.results import (
+    DotDict,
     dicts2index,
     find_crashed,
     get_data_dir,
@@ -86,7 +86,7 @@ xa = xr.DataArray.from_series(err, sparse=True)
 xa.name = "Error"
 
 # `orient` maps plot/processing roles to data dims.
-orient = Struct(
+orient = DotDict(
     mean=["seed"],  # average away the (ragged) `seed` dim
     tuned=["antithetic", "bias"],  # grid-search over both & pick the lower-error combo (`.min()`)
     fig=[],

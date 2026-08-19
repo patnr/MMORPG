@@ -13,9 +13,8 @@ matplotlib.use("Agg")
 import pandas as pd
 import pytest
 import xarray as xr
-from IPython.utils.ipstruct import Struct
 
-from mmorpg.results import NONE, shape_tables
+from mmorpg.results import NONE, DotDict, shape_tables
 from mmorpg.results.lineplots import LinePlots
 
 
@@ -104,7 +103,7 @@ class TestShapeTablesGolden:
 
     @pytest.fixture(scope="class")
     def orient(self):
-        return Struct(
+        return DotDict(
             fig=["case"],
             panel_row=[],
             panel_col=["nDim"],
@@ -211,7 +210,7 @@ class TestLinePlotsMatchesShapeTables:
     def orient(self):
         # `method` is deliberately unlisted -> it becomes a "hue" dim, giving each
         # (aspect, method) combo its own line/row.
-        return Struct(
+        return DotDict(
             fig=[],
             panel_row=[],
             panel_col=[],

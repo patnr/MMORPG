@@ -1,11 +1,12 @@
 """Build/filter/reshape results tables (pandas/xarray only -- no plotting).
 
 `shape_tables()` is the non-plotting sibling of `LinePlots` (see `lineplots.py`): both
-consume a sparse `skill: xr.DataArray` shaped by an `orient` `Struct`.
+consume a sparse `skill: xr.DataArray` shaped by an `orient` `DotDict`.
 """
 
 import itertools
 import warnings
+from copy import deepcopy
 
 import numpy as np
 import xarray as xr
@@ -18,6 +19,7 @@ from mmorpg.dispatch.paths import get_data_dir, load_data
 
 __all__ = [
     "NONE",
+    "DotDict",
     "dicts2index",
     "enum_explode",
     "find_categorical",
@@ -33,6 +35,30 @@ __all__ = [
     "sparse_to_series",
     "validate",
 ]
+
+
+class DotDict(dict):
+    """Dict that also supports attribute (dot) access.
+
+    Example:
+    >>> d = DotDict(x=1, y=2)
+    >>> d.x
+    1
+    >>> d.z = 3
+    >>> d['z']
+    3
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.__dict__ = self
+
+    def __deepcopy__(self, memo):
+        self2 = self.__class__()
+        memo[id(self)] = self2
+        for k, v in self.items():
+            self2[k] = deepcopy(v, memo)
+        return self2
 
 # None-like value that pandas does not convert to NaN. Will show as blank in legend.
 # PS: Cannot use actual `None` because gets re-converted to NaN unless `dtype` is object,
@@ -303,7 +329,7 @@ def shape_tables(skill, orient, dim_aliases={}, col_dims=None, find_cat=False):
     ----------
     skill : xr.DataArray
         Must use sparse underlying data.
-    orient : Struct
+    orient : DotDict
         As passed to `LinePlots`.
     dim_aliases : dict, optional
         Nick names for dims, used in the row/column index names.
